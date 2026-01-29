@@ -415,7 +415,8 @@ function transformOrderToHermes(meliOrder: any, integration: any) {
     sku: item.item?.seller_sku || item.item?.seller_custom_field || item.item?.id,
     title: item.item?.title,
     quantity: item.quantity,
-    unit_price: item.unit_price,
+    price: item.unit_price, // Precio unitario (Hermes espera 'price')
+    unit_price: item.unit_price, // Mantener para compatibilidad
     total: item.unit_price * item.quantity,
   })) || [];
 

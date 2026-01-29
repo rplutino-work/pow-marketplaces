@@ -12,6 +12,63 @@ import { decrypt } from '../services/encryption';
 import { logger } from '../utils/logger';
 
 // ═══════════════════════════════════════════════════════════════════════════
+// MAPEO DE CATEGORÍAS
+// ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * Mapeo de categorías de Hermes a categorías de MercadoLibre
+ * 
+ * Hermes tiene sus propias categorías internas (IDs numéricos como 10, 11, 12, etc.)
+ * que deben mapearse a IDs válidos de MercadoLibre (formato MLA...)
+ * 
+ * Por ahora, todas las categorías de Hermes se mapean a MLA1430 (Ropa y Accesorios)
+ * que es la categoría principal de indumentaria en MercadoLibre.
+ * 
+ * En el futuro, este mapeo puede expandirse para categorías específicas:
+ * - 10 -> MLA1430 (Ropa y Accesorios)
+ * - 11 -> MLA1430 (Ropa y Accesorios)
+ * - 12 -> MLA1430 (Ropa y Accesorios)
+ * - etc.
+ */
+const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
+  // Por ahora, todas las categorías de Hermes se mapean a indumentaria
+  // MLA1430 = Ropa y Accesorios (categoría principal de indumentaria en ML)
+  default: 'MLA1430',
+};
+
+/**
+ * Mapea un category_id de Hermes a un category_id válido de MercadoLibre
+ * 
+ * @param hermesCategoryId - ID de categoría de Hermes (puede ser número o string)
+ * @returns ID de categoría válido de MercadoLibre (formato MLA...)
+ */
+function mapHermesCategoryToMeli(hermesCategoryId: string | number | undefined): string {
+  // Si no hay category_id, usar el default
+  if (!hermesCategoryId) {
+    return HERMES_TO_MELI_CATEGORY_MAP.default;
+  }
+
+  // Si ya es un ID válido de MercadoLibre (formato MLA...), usarlo directamente
+  const categoryStr = String(hermesCategoryId);
+  if (/^MLA\d+$/.test(categoryStr)) {
+    return categoryStr;
+  }
+
+  // Buscar mapeo específico para esta categoría de Hermes
+  const mappedCategory = HERMES_TO_MELI_CATEGORY_MAP[hermesCategoryId] || 
+                         HERMES_TO_MELI_CATEGORY_MAP[categoryStr];
+
+  if (mappedCategory) {
+    logger.debug(`Categoría de Hermes ${hermesCategoryId} mapeada a ${mappedCategory}`);
+    return mappedCategory;
+  }
+
+  // Si no hay mapeo específico, usar el default (indumentaria)
+  logger.debug(`Categoría de Hermes ${hermesCategoryId} sin mapeo específico, usando default: ${HERMES_TO_MELI_CATEGORY_MAP.default}`);
+  return HERMES_TO_MELI_CATEGORY_MAP.default;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // TIPOS
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -200,10 +257,13 @@ async function createProductInMeli(
   const productSku = product.sku || product.identifier || String(product.id);
   const productDescription = product.description || product.brief_description || '';
   
+  // Mapear category_id de Hermes a MercadoLibre
+  const meliCategoryId = mapHermesCategoryToMeli(product.category_id);
+  
   // Construir item para MercadoLibre
   const meliItem: any = {
     title: productTitle.substring(0, 60),
-    category_id: String(product.category_id || 'MLA3530'), // Categoría por defecto
+    category_id: meliCategoryId,
     currency_id: 'ARS',
     buying_mode: 'buy_it_now',
     listing_type_id: 'gold_pro',

@@ -43,14 +43,49 @@ export async function sendOrder(
   const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
   try {
-    const response = await fetch(`${hermesUrl}/api/v1/marketplace/orders`, {
+    // La ruta en Hermes es: /api/marketplaces/:marketplace_code/orders
+    // El marketplace_code debe ser 'mercadolibre' o el nombre del marketplace
+    const marketplaceCode = order.marketplace || 'mercadolibre';
+    const endpoint = `${hermesUrl}/api/marketplaces/${marketplaceCode}/orders`;
+    
+    // Transformar el formato del payload para que coincida con lo que espera Hermes
+    // Hermes espera: { order: { external_id, items: [{ sku, quantity, price }], ... } }
+    const hermesPayload = {
+      marketplace_code: marketplaceCode,
+      order: {
+        external_id: order.external_id,
+        items: (order.items || []).map((item: any) => ({
+          sku: item.sku,
+          quantity: item.quantity,
+          price: item.price || item.unit_price, // Hermes espera 'price'
+          title: item.title,
+        })),
+        buyer: order.buyer,
+        shipping: order.shipping,
+        payments: order.payments,
+        total: order.total,
+        currency: order.currency,
+        status: order.status,
+        date_created: order.date_created,
+        date_closed: order.date_closed,
+        tags: order.tags,
+        raw_data: order.raw_data,
+      },
+    };
+
+    logger.debug(`Enviando orden a: ${endpoint}`, { 
+      external_id: order.external_id,
+      items_count: hermesPayload.order.items.length 
+    });
+
+    const response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
         Authorization: `Bearer ${token}`,
         'X-Marketplace-Token': token,
       },
-      body: JSON.stringify(order),
+      body: JSON.stringify(hermesPayload),
       signal: controller.signal,
     });
 
