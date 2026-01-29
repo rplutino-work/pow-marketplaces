@@ -32,15 +32,16 @@ import { logger } from '../utils/logger';
  */
 const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
   // Mapeo de categorías de Hermes a categorías de MercadoLibre
-  // Para productos con variaciones de ropa, usar categorías más específicas:
-  // MLA1430 = Ropa y Accesorios (categoría principal, más flexible)
-  // MLA417370 = Remeras (muy específica, puede requerir SIZE_GRID_ID)
-  // MLA414238 = Camisas (para blazers, camisas, etc.)
-  // MLA414252 = Pantalones
-  // MLA414239 = Camperas y Buzos
-  // MLA414254 = Vestidos
-  // MLA414240 = Faldas
-  default: 'MLA1430', // Ropa y Accesorios - categoría principal más flexible
+  // IMPORTANTE: MercadoLibre requiere categorías "hoja" (leaf categories), no categorías padre
+  // Para productos con variaciones de ropa, usar categorías hoja específicas:
+  // MLA414238 = Camisas (categoría hoja, para blazers, camisas, etc.)
+  // MLA414252 = Pantalones (categoría hoja)
+  // MLA414239 = Camperas y Buzos (categoría hoja)
+  // MLA414254 = Vestidos (categoría hoja)
+  // MLA414240 = Faldas (categoría hoja)
+  // MLA417370 = Remeras (categoría hoja, puede requerir SIZE_GRID_ID)
+  // MLA3530 = Hogar > Decoración (categoría hoja, no requiere GENDER ni SIZE_GRID_ID)
+  default: 'MLA414238', // Camisas - categoría hoja para blazers y prendas superiores
   fallback: 'MLA3530', // Hogar > Decoración - usar si falla con categorías de ropa
 };
 
@@ -268,11 +269,12 @@ async function createProductInMeli(
   const productDescription = product.description || product.brief_description || '';
   
   // Mapear category_id de Hermes a MercadoLibre
-  // Para productos con variaciones, usar categoría de ropa que acepta COLOR/SIZE
+  // Para productos con variaciones, usar categoría hoja de ropa que acepta COLOR/SIZE
   const hasVariations = product.variations && product.variations.length > 1;
-  // Usar categoría principal de ropa (MLA1430) que es más flexible y no requiere SIZE_GRID_ID obligatorio
+  // IMPORTANTE: MercadoLibre requiere categorías "hoja" (leaf categories)
+  // Usar MLA414238 (Camisas) que es una categoría hoja y acepta variaciones con COLOR/SIZE
   // Si el producto específicamente requiere SIZE_GRID_ID, se puede configurar en ajustes_default
-  const meliCategoryId = hasVariations ? 'MLA1430' : mapHermesCategoryToMeli(product.category_id);
+  const meliCategoryId = hasVariations ? 'MLA414238' : mapHermesCategoryToMeli(product.category_id);
   
   // Construir atributos base
   const baseAttributes: any[] = [
@@ -305,12 +307,22 @@ async function createProductInMeli(
     'nina': 'Niña',
   };
   
+  // Intentar obtener género de las propiedades
+  let genderValue: string | null = null;
   if (allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']) {
     const genderRaw = String(allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']).toLowerCase();
-    const genderValue = genderMap[genderRaw] || String(allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']);
+    genderValue = genderMap[genderRaw] || String(allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']);
+  }
+  
+  // Si no hay género en propiedades, usar "Unisex" como default para categorías de ropa
+  // IMPORTANTE: GENDER es obligatorio para categorías de ropa (MLA414238, MLA417370, etc.)
+  if (hasVariations || meliCategoryId.startsWith('MLA414') || meliCategoryId === 'MLA417370') {
+    if (!genderValue) {
+      genderValue = 'Unisex'; // Default para categorías de ropa
+      logger.info(`GENDER no encontrado en propiedades, usando default: ${genderValue}`);
+    }
     baseAttributes.push({ id: 'GENDER', value_name: genderValue });
   }
-  // Si no hay género, no agregarlo (algunas categorías no lo requieren)
 
   // MODEL (Modelo) - usar el título del producto si no hay modelo específico
   if (allProperties['Modelo'] || allProperties['MODEL']) {
@@ -502,11 +514,10 @@ async function createProductInMeli(
       meliItem.price = minPrice; // Usar el precio mínimo para el item principal
       
       // IMPORTANTE: picture_ids son los IDs reales de las imágenes después de subirlas a MercadoLibre
-      // No podemos usar índices porque MercadoLibre requiere los IDs reales
-      // Por ahora, NO incluimos picture_ids - MercadoLibre usará las imágenes del item principal
-      // Si la categoría requiere picture_ids, necesitaremos subir las imágenes primero y obtener sus IDs
-      // Para categorías de ropa, esto puede ser opcional dependiendo de la categoría
-      const pictureIds: string[] = []; // Dejar vacío - MercadoLibre usará imágenes del item principal
+      // MercadoLibre requiere que cada variación tenga entre 1 y 10 imágenes (picture_ids)
+      // Por ahora, intentamos crear sin picture_ids y si falla, el fallback creará el producto como simple
+      // TODO FUTURO: Subir imágenes primero y obtener sus IDs para usar en variaciones
+      const pictureIds: string[] = []; // Por ahora vacío - si falla, el fallback manejará el error
       
       // Validar que tenemos imágenes en el item principal
       const totalPictures = meliItem.pictures ? meliItem.pictures.length : 0;
@@ -634,11 +645,12 @@ async function createProductInMeli(
           attribute_combinations: attributeCombinations, // REQUERIDO: al menos uno
         };
         
-        // Solo agregar picture_ids si tenemos IDs reales (no índices)
-        // Por ahora, dejamos que MercadoLibre use las imágenes del item principal
-        // if (pictureIds.length > 0) {
-        //   variation.picture_ids = pictureIds;
-        // }
+        // IMPORTANTE: Algunas categorías requieren picture_ids en las variaciones
+        // Por ahora, intentamos crear sin picture_ids y si falla, el fallback manejará el error
+        // Si tenemos picture_ids, agregarlos
+        if (pictureIds.length > 0) {
+          variation.picture_ids = pictureIds;
+        }
         
         return variation;
       }).filter((v: any) => v !== null); // Filtrar variaciones nulas
@@ -735,11 +747,23 @@ async function createProductInMeli(
   await meliService.createItem(meliItem, accessToken);
     logger.info(`Producto creado en ML: ${productSku}`);
   } catch (error: any) {
-    // Si falla por SIZE_GRID_ID inválido, intentar sin variaciones o con otra categoría
-    if (error.message?.includes('SIZE_GRID_ID') || error.message?.includes('size_grid')) {
-      logger.warn(`Error con SIZE_GRID_ID, intentando crear producto sin variaciones o con categoría alternativa`);
+    // Manejar errores comunes y intentar fallback
+    const errorMessage = error.message || '';
+    const isSizeGridError = errorMessage.includes('SIZE_GRID_ID') || errorMessage.includes('size_grid');
+    const isPictureIdsError = errorMessage.includes('picture') || errorMessage.includes('pictures');
+    const isCategoryError = errorMessage.includes('category') || errorMessage.includes('leaf category') || errorMessage.includes('not allowed to post');
+    const isGenderError = errorMessage.includes('Género') || errorMessage.includes('GENDER') || errorMessage.includes('obligatorio');
+    
+    if (isSizeGridError || isPictureIdsError || isCategoryError || isGenderError) {
+      logger.warn(`Error al crear producto con variaciones, intentando crear como producto simple:`, {
+        error: errorMessage,
+        isSizeGridError,
+        isPictureIdsError,
+        isCategoryError,
+        isGenderError,
+      });
       
-      // Remover SIZE_GRID_ID de los atributos
+      // Remover SIZE_GRID_ID de los atributos si existe
       const sizeGridIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'SIZE_GRID_ID');
       if (sizeGridIndex >= 0) {
         meliItem.attributes.splice(sizeGridIndex, 1);
@@ -748,12 +772,14 @@ async function createProductInMeli(
       
       // Si tiene variaciones, intentar crear como producto simple
       if (meliItem.variations && meliItem.variations.length > 0) {
-        logger.info(`Intentando crear como producto simple (sin variaciones) debido a error de SIZE_GRID_ID`);
+        logger.info(`Intentando crear como producto simple (sin variaciones) debido a error`);
         
         // Usar la primera variación como producto simple
         const firstVariation = product.variations?.[0];
         if (firstVariation) {
           const variantSku = firstVariation.sku || firstVariation.identifier || productSku;
+          const variantAttrs = firstVariation.attributes || firstVariation.properties || {};
+          
           meliItem.price = firstVariation.price || product.price;
           meliItem.available_quantity = firstVariation.stock || product.stock;
           meliItem.seller_custom_field = variantSku;
@@ -764,24 +790,63 @@ async function createProductInMeli(
             meliItem.attributes[skuAttributeIndex].value_name = variantSku;
           }
           
+          // Agregar COLOR y SIZE como atributos del item principal si están disponibles
+          if (variantAttrs['Color'] || variantAttrs['COLOR']) {
+            const colorIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'COLOR');
+            if (colorIndex >= 0) {
+              meliItem.attributes[colorIndex].value_name = String(variantAttrs['Color'] || variantAttrs['COLOR']);
+            } else {
+              meliItem.attributes.push({
+                id: 'COLOR',
+                value_name: String(variantAttrs['Color'] || variantAttrs['COLOR']),
+              });
+            }
+          }
+          
+          if (variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']) {
+            const sizeIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'SIZE');
+            if (sizeIndex >= 0) {
+              meliItem.attributes[sizeIndex].value_name = String(variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']);
+            } else {
+              meliItem.attributes.push({
+                id: 'SIZE',
+                value_name: String(variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']),
+              });
+            }
+          }
+          
           // Remover variaciones
           delete meliItem.variations;
           
-          // Cambiar a categoría que no requiere SIZE_GRID_ID
-          meliItem.category_id = 'MLA3530'; // Hogar > Decoración (no requiere SIZE_GRID_ID)
-          logger.info(`Categoría cambiada a MLA3530 (no requiere SIZE_GRID_ID)`);
+          // Cambiar a categoría que no requiere SIZE_GRID_ID ni picture_ids en variaciones
+          meliItem.category_id = 'MLA3530'; // Hogar > Decoración (no requiere SIZE_GRID_ID ni GENDER)
+          logger.info(`Categoría cambiada a MLA3530 (no requiere SIZE_GRID_ID, GENDER ni picture_ids en variaciones)`);
+          
+          // Remover GENDER si existe (MLA3530 no lo requiere)
+          const genderIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'GENDER');
+          if (genderIndex >= 0) {
+            meliItem.attributes.splice(genderIndex, 1);
+            logger.info(`GENDER removido de atributos (no requerido para MLA3530)`);
+          }
         }
       } else {
         // Si no tiene variaciones, cambiar a categoría que no requiere SIZE_GRID_ID
         meliItem.category_id = 'MLA3530'; // Hogar > Decoración
         logger.info(`Categoría cambiada a MLA3530 (no requiere SIZE_GRID_ID)`);
+        
+        // Remover GENDER si existe
+        const genderIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'GENDER');
+        if (genderIndex >= 0) {
+          meliItem.attributes.splice(genderIndex, 1);
+          logger.info(`GENDER removido de atributos (no requerido para MLA3530)`);
+        }
       }
       
       // Intentar crear nuevamente
       await meliService.createItem(meliItem, accessToken);
-      logger.info(`Producto creado en ML (sin SIZE_GRID_ID): ${productSku}`);
+      logger.info(`Producto creado en ML (como producto simple): ${productSku}`);
     } else {
-      // Si no es un error de SIZE_GRID_ID, re-lanzar el error
+      // Si no es un error conocido, re-lanzar el error
       throw error;
     }
   }
