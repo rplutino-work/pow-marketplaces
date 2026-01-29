@@ -33,9 +33,10 @@ import { logger } from '../utils/logger';
 const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
   // Mapeo de categorías de Hermes a categorías de MercadoLibre
   // MLA417370 = Remeras (categoría de ropa que acepta COLOR y SIZE)
-  // IMPORTANTE: Esta categoría puede requerir SIZE_GRID_ID, pero primero intentamos sin él
-  // Si falla, el usuario deberá configurar SIZE_GRID_ID en su cuenta de MercadoLibre
-  default: 'MLA417370', // Remeras - categoría de ropa que acepta COLOR y SIZE
+  // IMPORTANTE: Esta categoría requiere SIZE_GRID_ID, pero intentamos primero
+  // Si falla, crearemos el producto como simple (sin variaciones) usando MLA3530
+  default: 'MLA417370', // Remeras - intentar primero con variaciones
+  fallback: 'MLA3530', // Hogar > Decoración - usar si falla con MLA417370
 };
 
 /**
@@ -260,7 +261,9 @@ async function createProductInMeli(
   const productDescription = product.description || product.brief_description || '';
   
   // Mapear category_id de Hermes a MercadoLibre
-  const meliCategoryId = mapHermesCategoryToMeli(product.category_id);
+  // Para productos con variaciones, usar categoría de ropa que acepta COLOR/SIZE
+  const hasVariations = product.variations && product.variations.length > 1;
+  const meliCategoryId = hasVariations ? 'MLA417370' : mapHermesCategoryToMeli(product.category_id);
   
   // Construir atributos base
   const baseAttributes: any[] = [
@@ -407,7 +410,6 @@ async function createProductInMeli(
         const attributeCombinations: any[] = [];
         
         // Buscar COLOR con diferentes nombres posibles
-        // IMPORTANTE: Solo usar COLOR si la categoría lo acepta
         const colorKeys = Object.keys(variantAttrs).filter(key => 
           /color|colour|cor/i.test(key)
         );
@@ -424,7 +426,6 @@ async function createProductInMeli(
         }
         
         // Buscar SIZE/TALLE con diferentes nombres posibles
-        // IMPORTANTE: Solo usar SIZE si la categoría lo acepta
         const sizeKeys = Object.keys(variantAttrs).filter(key => 
           /talle|talla|size|tamaño|tamano/i.test(key)
         );
@@ -506,7 +507,7 @@ async function createProductInMeli(
         const variation: any = {
           seller_custom_field: variantSku, // SKU de la variación (el sistema viejo busca en seller_sku)
           price: minPrice, // Precio de la variación (debe ser igual al item principal)
-          available_quantity: v.stock,
+        available_quantity: v.stock,
           attribute_combinations: attributeCombinations, // REQUERIDO: al menos uno
         };
         
@@ -606,6 +607,7 @@ async function createProductInMeli(
     meliItem.available_quantity = product.stock;
   }
 
+  // Crear el producto en MercadoLibre
   await meliService.createItem(meliItem, accessToken);
   logger.info(`Producto creado en ML: ${productSku}`);
 }
