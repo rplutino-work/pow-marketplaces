@@ -18,10 +18,55 @@ const router = Router();
 
 /**
  * GET /api/v1/integrations - Listar integraciones
+ * 
+ * Query params:
+ *   - marketplace_id: Filtrar por marketplace
+ *   - estado: Filtrar por estado
+ *   - cliente_domain: Filtrar por dominio
+ *   - hermes_integration_id: Filtrar por ID de Hermes (compatibilidad)
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const { marketplace_id, estado, cliente_domain } = req.query;
+    const { marketplace_id, estado, cliente_domain, hermes_integration_id } = req.query;
+
+    // Si buscan por hermes_integration_id, buscar directo
+    if (hermes_integration_id) {
+      const prisma = getPrisma();
+      const integrations = await prisma.integration.findMany({
+        where: { hermes_integration_id: String(hermes_integration_id) },
+        include: {
+          marketplace: true,
+          credentials: { orderBy: { updated_at: 'desc' }, take: 1 },
+        },
+      });
+
+      return res.json(integrations.map(integration => {
+        const credential = integration.credentials[0];
+        let tokenStatus = 'no_credentials';
+        if (credential?.expires_at) {
+          tokenStatus = credential.expires_at > new Date() ? 'valid' : 'expired';
+        } else if (credential?.access_token) {
+          tokenStatus = 'unknown';
+        }
+
+        return {
+          id: integration.id,
+          hermes_integration_id: integration.hermes_integration_id,
+          cliente_name: integration.cliente_name,
+          cliente_domain: integration.cliente_domain,
+          marketplace_id: integration.marketplace_id,
+          marketplace_name: integration.marketplace.name,
+          estado: integration.estado,
+          hermes_api_url: integration.hermes_api_url,
+          hermes_enabled: integration.hermes_enabled,
+          token_status: tokenStatus,
+          user_id: credential?.user_id || null,
+          expires_at: credential?.expires_at?.toISOString() || null,
+          created_at: integration.created_at,
+          updated_at: integration.updated_at,
+        };
+      }));
+    }
 
     const filter: any = {};
     if (marketplace_id) filter.marketplace_id = String(marketplace_id);
@@ -143,6 +188,54 @@ router.delete('/:id', async (req: Request, res: Response) => {
 // ═══════════════════════════════════════════════════════════════════════════
 // ESTADO Y HEALTH
 // ═══════════════════════════════════════════════════════════════════════════
+
+/**
+ * GET /api/v1/integrations/:id/status - Estado del token (usado por Hermes)
+ */
+router.get('/:id/status', async (req: Request, res: Response) => {
+  try {
+    const prisma = getPrisma();
+
+    const integration = await prisma.integration.findUnique({
+      where: { id: req.params.id },
+      include: {
+        marketplace: true,
+        credentials: { orderBy: { updated_at: 'desc' }, take: 1 },
+      },
+    });
+
+    if (!integration) {
+      return res.status(404).json({ error: 'Integración no encontrada' });
+    }
+
+    const credential = integration.credentials[0];
+    let tokenStatus = 'no_credentials';
+    
+    if (credential) {
+      if (credential.expires_at) {
+        tokenStatus = credential.expires_at > new Date() ? 'valid' : 'expired';
+      } else if (credential.access_token) {
+        tokenStatus = 'unknown';
+      }
+    }
+
+    res.json({
+      integration_id: integration.id,
+      hermes_integration_id: integration.hermes_integration_id,
+      marketplace: integration.marketplace.name,
+      estado: integration.estado,
+      token_status: tokenStatus,
+      user_id: credential?.user_id || null,
+      expires_at: credential?.expires_at?.toISOString() || null,
+      last_refresh: credential?.token_last_refreshed_at?.toISOString() || null,
+      hermes_enabled: integration.hermes_enabled,
+    });
+
+  } catch (error: any) {
+    logger.error('Error obteniendo status:', { error: error.message });
+    res.status(500).json({ error: 'Error interno' });
+  }
+});
 
 /**
  * GET /api/v1/integrations/:id/health - Estado de salud
