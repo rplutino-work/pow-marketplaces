@@ -170,7 +170,8 @@ export async function resolveIntegration(params: {
     domain = params.hermes_api_url;
   }
 
-  // Buscar integración con coincidencia exacta
+  // Buscar integración con coincidencia exacta por hermes_integration_id + URL
+  // SIEMPRE se debe buscar por URL para evitar conflictos multi-tenant
   const integration = await prisma.integration.findFirst({
     where: {
       hermes_integration_id: params.hermes_integration_id,
@@ -186,6 +187,7 @@ export async function resolveIntegration(params: {
         take: 1,
       },
     },
+    orderBy: { updated_at: 'desc' },
   });
 
   if (!integration) {

@@ -122,6 +122,7 @@ router.post('/catalog/sync', async (req: Request, res: Response) => {
         where: { id: integration.id },
         data: { hermes_api_url: hermes_instance.api_url, updated_at: new Date() },
       });
+      logger.info(`URL de Hermes actualizada: ${hermes_instance.api_url}`);
     }
 
     // Ejecutar sincronización

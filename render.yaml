@@ -1,61 +1,49 @@
-# ═══════════════════════════════════════════════════════════════════════════
-# RENDER CONFIGURATION - POW Marketplaces Microservice
-# ═══════════════════════════════════════════════════════════════════════════
-#
-# Este archivo configura el despliegue del microservicio en Render.
-# 
-# PARA DESPLEGAR:
-# 1. Crear nuevo Web Service en Render
-# 2. Conectar repositorio de GitHub
-# 3. Las variables de entorno se configuran en el dashboard de Render
-
 services:
   - type: web
-    name: pow-marketplaces
+    name: marketplace-microservice
     env: node
-    region: oregon
-    plan: starter
-    buildCommand: npm install && npm run prisma:generate && npm run build
+    plan: free
+    buildCommand: npm install && npm run build
     startCommand: npm run start:prod
-    healthCheckPath: /health
     envVars:
-      # ═══════════════════════════════════════════════════════════════════
-      # VARIABLES REQUERIDAS (configurar en Render Dashboard)
-      # ═══════════════════════════════════════════════════════════════════
-      
-      # Base de datos PostgreSQL
-      - key: DATABASE_URL
-        sync: false  # Configurar manualmente en Render
-
-      # Clave de encriptación (32 bytes base64)
-      - key: ENCRYPTION_KEY
-        sync: false  # Configurar manualmente en Render
-
-      # Credenciales de la aplicación centralizada de MercadoLibre POW
-      - key: MELI_CENTRAL_APP_ID
-        sync: false  # Configurar manualmente en Render
-
-      - key: MELI_CENTRAL_APP_SECRET
-        sync: false  # Configurar manualmente en Render
-
-      # ═══════════════════════════════════════════════════════════════════
-      # VARIABLES CON VALORES POR DEFECTO
-      # ═══════════════════════════════════════════════════════════════════
-      
       - key: NODE_ENV
         value: production
-
       - key: PORT
         value: 10000
-
-      - key: APP_URL
-        value: https://pow-marketplaces.onrender.com
-
+      - key: DATABASE_URL
+        fromDatabase:
+          name: marketplace-db
+          property: connectionString
+      - key: ENCRYPTION_KEY
+        sync: false
+      - key: BASE_URL
+        sync: false
+      - key: HERMES_BASE_URL
+        sync: false
+      - key: MELI_CLIENT_SECRET
+        sync: false
+      # App centralizada de MercadoLibre (OAuth simplificado)
+      - key: MELI_CENTRAL_APP_ID
+        sync: false
+      - key: MELI_CENTRAL_APP_SECRET
+        sync: false
+      - key: MICROSERVICE_BASE_URL
+        sync: false
       - key: ML_API_URL
         value: https://api.mercadolibre.com
-
-      - key: LOG_LEVEL
-        value: info
-
       - key: ALLOWED_ORIGINS
-        value: "*"
+        sync: false
+      - key: REDIS_URL
+        fromDatabase:
+          name: marketplace-redis
+          property: connectionString
+
+databases:
+  - name: marketplace-db
+    plan: free
+    databaseName: marketplace
+    user: marketplace_user
+  - name: marketplace-redis
+    plan: free
+    type: redis
+
