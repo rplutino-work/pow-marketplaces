@@ -393,24 +393,49 @@ async function createProductInMeli(
         const variantSku = v.sku || v.identifier || '';
         const variantAttrs = v.attributes || v.properties || {};
         
+        // Log detallado de las propiedades recibidas
+        logger.info(`Variación ${variantSku} - Propiedades recibidas:`, {
+          sku: variantSku,
+          attributes: v.attributes,
+          properties: v.properties,
+          all_keys: Object.keys(variantAttrs),
+          all_values: Object.entries(variantAttrs),
+        });
+        
         // Construir attribute_combinations para la variación
         // IMPORTANTE: Las variaciones DEBEN tener al menos un attribute_combination
         const attributeCombinations: any[] = [];
         
-        // COLOR
-        if (variantAttrs['Color'] || variantAttrs['COLOR']) {
-          attributeCombinations.push({
-            id: 'COLOR',
-            value_name: String(variantAttrs['Color'] || variantAttrs['COLOR']),
-          });
+        // Buscar COLOR con diferentes nombres posibles
+        const colorKeys = Object.keys(variantAttrs).filter(key => 
+          /color|colour|cor/i.test(key)
+        );
+        if (colorKeys.length > 0) {
+          const colorKey = colorKeys[0];
+          const colorValue = variantAttrs[colorKey];
+          if (colorValue) {
+            attributeCombinations.push({
+              id: 'COLOR',
+              value_name: String(colorValue),
+            });
+            logger.debug(`Color encontrado en propiedad '${colorKey}': ${colorValue}`);
+          }
         }
         
-        // SIZE (Talle)
-        if (variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']) {
-          attributeCombinations.push({
-            id: 'SIZE',
-            value_name: String(variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']),
-          });
+        // Buscar SIZE/TALLE con diferentes nombres posibles
+        const sizeKeys = Object.keys(variantAttrs).filter(key => 
+          /talle|talla|size|tamaño|tamano/i.test(key)
+        );
+        if (sizeKeys.length > 0) {
+          const sizeKey = sizeKeys[0];
+          const sizeValue = variantAttrs[sizeKey];
+          if (sizeValue) {
+            attributeCombinations.push({
+              id: 'SIZE',
+              value_name: String(sizeValue),
+            });
+            logger.debug(`Talle encontrado en propiedad '${sizeKey}': ${sizeValue}`);
+          }
         }
         
         // Si no hay COLOR ni SIZE, crear atributos diferenciadores
@@ -421,24 +446,31 @@ async function createProductInMeli(
           // Intentar usar cualquier propiedad disponible como diferenciador
           // que NO esté ya en item.attributes
           const attributesInItem = baseAttributes.map((attr: any) => attr.id);
-          const firstProperty = Object.entries(variantAttrs).find(([key]) => {
+          const excludedKeys = ['SELLER_SKU', 'BRAND', 'MODEL', 'GENDER', 'ITEM_CONDITION'];
+          
+          // Buscar la primera propiedad que no esté excluida
+          const firstProperty = Object.entries(variantAttrs).find(([key, value]) => {
+            if (!value || String(value).trim() === '') return false; // Ignorar valores vacíos
+            
             const upperKey = key.toUpperCase();
             return !attributesInItem.includes(upperKey) && 
-                   upperKey !== 'SELLER_SKU' && 
-                   upperKey !== 'BRAND' && 
-                   upperKey !== 'MODEL' && 
-                   upperKey !== 'GENDER';
+                   !excludedKeys.includes(upperKey);
           });
           
           if (firstProperty) {
+            const [key, value] = firstProperty;
             attributeCombinations.push({
-              id: firstProperty[0].toUpperCase(),
-              value_name: String(firstProperty[1]),
+              id: key.toUpperCase(),
+              value_name: String(value),
             });
+            logger.info(`Usando propiedad '${key}' como diferenciador para variación ${variantSku}: ${value}`);
           } else {
-            // Si no hay propiedades diferenciadoras válidas, no podemos crear variaciones
-            // Esto debería ser manejado antes, pero por seguridad lanzamos un error
-            logger.warn(`Variación ${variantSku} sin atributos diferenciadores válidos - se omitirá`);
+            // Si no hay propiedades diferenciadoras válidas, log detallado y omitir
+            logger.warn(`Variación ${variantSku} sin atributos diferenciadores válidos - se omitirá`, {
+              available_properties: Object.keys(variantAttrs),
+              excluded_attributes: attributesInItem,
+              excluded_keys: excludedKeys,
+            });
             return null; // Retornar null para filtrar esta variación
           }
         }
@@ -475,9 +507,44 @@ async function createProductInMeli(
         };
       }).filter((v: any) => v !== null); // Filtrar variaciones nulas
       
-      // Si después de filtrar no quedan variaciones válidas, no crear el producto con variaciones
+      // Si después de filtrar no quedan variaciones válidas, crear el producto como simple
       if (meliItem.variations.length === 0) {
-        throw new Error('No hay variaciones válidas con attribute_combinations requeridos');
+        logger.warn(`Producto ${productSku} sin variaciones válidas - creando como producto simple`);
+        // Crear como producto simple usando la primera variación
+        const firstVariation = product.variations[0];
+        const variantSku = firstVariation.sku || firstVariation.identifier || productSku;
+        
+        meliItem.price = firstVariation.price || product.price;
+        meliItem.available_quantity = firstVariation.stock || product.stock;
+        meliItem.seller_custom_field = variantSku;
+        
+        // Actualizar el atributo SELLER_SKU con el SKU de la variación
+        const skuAttributeIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'SELLER_SKU');
+        if (skuAttributeIndex >= 0) {
+          meliItem.attributes[skuAttributeIndex].value_name = variantSku;
+        } else {
+          meliItem.attributes.push({ id: 'SELLER_SKU', value_name: variantSku });
+        }
+        
+        // No agregar variaciones (producto simple)
+        delete meliItem.variations;
+      } else if (meliItem.variations.length === 1) {
+        // Si solo queda una variación válida, también crear como producto simple
+        logger.info(`Producto ${productSku} con solo 1 variación válida - creando como producto simple`);
+        const singleVariation = meliItem.variations[0];
+        
+        meliItem.price = singleVariation.price;
+        meliItem.available_quantity = singleVariation.available_quantity;
+        meliItem.seller_custom_field = singleVariation.seller_custom_field;
+        
+        // Actualizar el atributo SELLER_SKU
+        const skuAttributeIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'SELLER_SKU');
+        if (skuAttributeIndex >= 0) {
+          meliItem.attributes[skuAttributeIndex].value_name = singleVariation.seller_custom_field;
+        }
+        
+        // No agregar variaciones (producto simple)
+        delete meliItem.variations;
       }
     } else {
       // Producto simple (una sola variación)
