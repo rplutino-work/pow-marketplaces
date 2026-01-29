@@ -186,7 +186,7 @@ export async function syncCatalog(params: {
   // Sincronizar cada producto
   for (const product of params.products) {
     try {
-      const syncResult = await syncProduct(product, userId, accessToken);
+      const syncResult = await syncProduct(product, userId, accessToken, params.integration_id);
       
       if (syncResult.created) result.created++;
       if (syncResult.updated) result.updated++;
@@ -230,7 +230,8 @@ export async function syncCatalog(params: {
 async function syncProduct(
   product: HermesProduct,
   userId: string,
-  accessToken: string
+  accessToken: string,
+  integrationId: string
 ): Promise<{ created: boolean; updated: boolean }> {
   
   // Obtener SKU del producto
@@ -245,14 +246,15 @@ async function syncProduct(
     return { created: false, updated: true };
   } else {
     // Crear nuevo
-    await createProductInMeli(product, accessToken);
+    await createProductInMeli(product, accessToken, integrationId);
     return { created: true, updated: false };
   }
 }
 
 async function createProductInMeli(
   product: HermesProduct,
-  accessToken: string
+  accessToken: string,
+  integrationId: string
 ): Promise<void> {
   
   // Obtener campos con fallbacks
@@ -314,13 +316,35 @@ async function createProductInMeli(
     baseAttributes.push({ id: 'MODEL', value_name: productTitle.substring(0, 50) });
   }
 
-  // SIZE_GRID_ID - Solo agregar si está disponible (requerido para categorías de ropa)
-  // Este ID debe estar configurado en la cuenta de MercadoLibre del vendedor
-  // Por ahora no lo agregamos automáticamente, el usuario debe configurarlo
-  // TODO: Agregar SIZE_GRID_ID como configuración de integración
-  // if (integration.size_grid_id) {
-  //   baseAttributes.push({ id: 'SIZE_GRID_ID', value_name: integration.size_grid_id });
-  // }
+  // SIZE_GRID_ID - Obtener de ajustes_default de la integración (requerido para categorías de ropa)
+  // Este ID debe estar configurado en ajustes_default como JSON: {"size_grid_id": "sizegrid1"}
+  // IMPORTANTE: SIZE_GRID_ID debe estar en los atributos del item principal, NO en las variaciones
+  if (hasVariations && meliCategoryId === 'MLA417370') {
+    try {
+      const prisma = getPrisma();
+      const integration = await prisma.integration.findUnique({
+        where: { id: integrationId },
+        select: { ajustes_default: true },
+      });
+      
+      if (integration?.ajustes_default) {
+        const ajustes = JSON.parse(integration.ajustes_default);
+        if (ajustes.size_grid_id) {
+          baseAttributes.push({ 
+            id: 'SIZE_GRID_ID', 
+            value_name: String(ajustes.size_grid_id) 
+          });
+          logger.info(`SIZE_GRID_ID agregado desde configuración: ${ajustes.size_grid_id}`);
+        } else {
+          logger.warn(`SIZE_GRID_ID no configurado en ajustes_default. Agregar: {"size_grid_id": "sizegrid1"}`);
+        }
+      } else {
+        logger.warn(`ajustes_default no configurado para integración ${integrationId}. Agregar: {"size_grid_id": "sizegrid1"}`);
+      }
+    } catch (error) {
+      logger.warn(`No se pudo obtener SIZE_GRID_ID de la integración: ${error}`);
+    }
+  }
   
   // Construir item para MercadoLibre
   const meliItem: any = {
