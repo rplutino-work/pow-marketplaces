@@ -1,36 +1,33 @@
 # Dependencies
 node_modules/
-.pnp
-.pnp.js
 
-# Build
+# Build output
 dist/
-build/
 
 # Environment
 .env
 .env.local
 .env.*.local
 
-# IDE
-.idea/
-.vscode/
-*.swp
-*.swo
-.DS_Store
-
 # Logs
 logs/
 *.log
 npm-debug.log*
 
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
 # Testing
 coverage/
+.nyc_output/
 
 # Prisma
-prisma/*.db
-prisma/*.db-journal
-
-# Misc
-.cache/
-tmp/
+*.db
+*.db-journal

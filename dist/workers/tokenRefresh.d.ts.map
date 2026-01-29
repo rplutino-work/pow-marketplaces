@@ -1,1 +1,0 @@
-{"version":3,"file":"tokenRefresh.d.ts","sourceRoot":"","sources":["../../src/workers/tokenRefresh.ts"],"names":[],"mappings":"AAAA;;;;;;;;;;;;;GAaG;AAeH;;;;GAIG;AACH,wBAAsB,uBAAuB,IAAI,OAAO,CAAC;IACvD,OAAO,EAAE,MAAM,CAAC;IAChB,SAAS,EAAE,MAAM,CAAC;IAClB,MAAM,EAAE,MAAM,CAAC;IACf,MAAM,EAAE,MAAM,EAAE,CAAC;CAClB,CAAC,CA4DD;;;;AA2ED,wBAEE"}

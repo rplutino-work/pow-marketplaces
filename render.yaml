@@ -1,0 +1,61 @@
+# ═══════════════════════════════════════════════════════════════════════════
+# RENDER CONFIGURATION - POW Marketplaces Microservice
+# ═══════════════════════════════════════════════════════════════════════════
+#
+# Este archivo configura el despliegue del microservicio en Render.
+# 
+# PARA DESPLEGAR:
+# 1. Crear nuevo Web Service en Render
+# 2. Conectar repositorio de GitHub
+# 3. Las variables de entorno se configuran en el dashboard de Render
+
+services:
+  - type: web
+    name: pow-marketplaces
+    env: node
+    region: oregon
+    plan: starter
+    buildCommand: npm install && npm run prisma:generate && npm run build
+    startCommand: npm run start:prod
+    healthCheckPath: /health
+    envVars:
+      # ═══════════════════════════════════════════════════════════════════
+      # VARIABLES REQUERIDAS (configurar en Render Dashboard)
+      # ═══════════════════════════════════════════════════════════════════
+      
+      # Base de datos PostgreSQL
+      - key: DATABASE_URL
+        sync: false  # Configurar manualmente en Render
+
+      # Clave de encriptación (32 bytes base64)
+      - key: ENCRYPTION_KEY
+        sync: false  # Configurar manualmente en Render
+
+      # Credenciales de la aplicación centralizada de MercadoLibre POW
+      - key: MELI_CENTRAL_APP_ID
+        sync: false  # Configurar manualmente en Render
+
+      - key: MELI_CENTRAL_APP_SECRET
+        sync: false  # Configurar manualmente en Render
+
+      # ═══════════════════════════════════════════════════════════════════
+      # VARIABLES CON VALORES POR DEFECTO
+      # ═══════════════════════════════════════════════════════════════════
+      
+      - key: NODE_ENV
+        value: production
+
+      - key: PORT
+        value: 10000
+
+      - key: APP_URL
+        value: https://pow-marketplaces.onrender.com
+
+      - key: ML_API_URL
+        value: https://api.mercadolibre.com
+
+      - key: LOG_LEVEL
+        value: info
+
+      - key: ALLOWED_ORIGINS
+        value: "*"
