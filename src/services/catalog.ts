@@ -320,7 +320,7 @@ async function createProductInMeli(
   // if (integration.size_grid_id) {
   //   baseAttributes.push({ id: 'SIZE_GRID_ID', value_name: integration.size_grid_id });
   // }
-
+  
   // Construir item para MercadoLibre
   const meliItem: any = {
     title: productTitle.substring(0, 60),
@@ -355,17 +355,45 @@ async function createProductInMeli(
       // IMPORTANTE: Cada variación debe tener su SKU en seller_custom_field
       // para que cuando llegue la orden, el sistema viejo pueda encontrarlo con item.dig('item','seller_sku')
       
-      // El precio del item principal debe ser el MAYOR de las variaciones
-      // MercadoLibre requiere que el precio del item principal sea >= precio de variaciones
-      const maxPrice = Math.max(...product.variations.map(v => v.price));
-      meliItem.price = maxPrice;
+      // El precio del item principal debe ser IGUAL al precio de las variaciones
+      // IMPORTANTE: Todas las variaciones deben tener el mismo precio que el item principal
+      // Si hay diferentes precios, usar el mínimo para todas
+      const prices = product.variations.map(v => v.price);
+      const minPrice = Math.min(...prices);
+      meliItem.price = minPrice; // Usar el precio mínimo para el item principal
       
-      meliItem.variations = product.variations.map(v => {
+      // Preparar picture_ids para las variaciones (necesitan entre 1 y 10 imágenes)
+      // IMPORTANTE: MercadoLibre requiere que cada variación tenga entre 1 y 10 picture_ids
+      // Los picture_ids son índices 1-based de las imágenes del item principal
+      const pictureIds: string[] = [];
+      const totalPictures = meliItem.pictures ? meliItem.pictures.length : 0;
+      
+      if (totalPictures > 0) {
+        // Usar hasta 10 imágenes (máximo permitido por variación)
+        const maxPictures = Math.min(totalPictures, 10);
+        for (let i = 0; i < maxPictures; i++) {
+          pictureIds.push(String(i + 1)); // MercadoLibre usa índices 1-indexed
+        }
+      } else {
+        // Si no hay imágenes en el item principal, esto es un problema
+        // Pero MercadoLibre requiere al menos 1 picture_id, así que usamos '1'
+        // Nota: Esto puede fallar si realmente no hay imágenes
+        logger.warn(`Producto ${productSku} sin imágenes - usando picture_id '1' como fallback`);
+        pictureIds.push('1');
+      }
+      
+      // Validar que tenemos al menos 1 picture_id
+      if (pictureIds.length === 0) {
+        logger.warn(`No se pudieron generar picture_ids para producto ${productSku} - usando fallback`);
+        pictureIds.push('1');
+      }
+      
+      meliItem.variations = product.variations.map((v, index) => {
         const variantSku = v.sku || v.identifier || '';
         const variantAttrs = v.attributes || v.properties || {};
         
         // Construir attribute_combinations para la variación
-        // Estos deben incluir COLOR, SIZE (Talle), etc.
+        // IMPORTANTE: Las variaciones DEBEN tener al menos un attribute_combination
         const attributeCombinations: any[] = [];
         
         // COLOR
@@ -384,13 +412,48 @@ async function createProductInMeli(
           });
         }
         
+        // Si no hay COLOR ni SIZE, crear atributos diferenciadores
+        // IMPORTANTE: MercadoLibre requiere al menos un attribute_combination válido
+        if (attributeCombinations.length === 0) {
+          // Si no hay propiedades diferenciadoras, usar el SKU como diferenciador
+          // Pero necesitamos un atributo válido de MercadoLibre
+          // Usar BRAND o MODEL como fallback si están disponibles
+          if (allProperties['Brand'] || allProperties['BRAND'] || product.brand) {
+            attributeCombinations.push({
+              id: 'BRAND',
+              value_name: String(allProperties['Brand'] || allProperties['BRAND'] || product.brand || 'Genérica'),
+            });
+          }
+          
+          // Si aún no hay atributos, usar un atributo genérico válido
+          // Nota: Esto puede fallar si MercadoLibre no acepta este atributo para esta categoría
+          if (attributeCombinations.length === 0) {
+            // Intentar usar cualquier propiedad disponible como diferenciador
+            const firstProperty = Object.entries(variantAttrs)[0];
+            if (firstProperty) {
+              attributeCombinations.push({
+                id: firstProperty[0].toUpperCase(),
+                value_name: String(firstProperty[1]),
+              });
+            } else {
+              // Último recurso: usar el SKU como valor de un atributo genérico
+              // Esto puede no funcionar, pero es mejor que no tener nada
+              attributeCombinations.push({
+                id: 'SELLER_SKU',
+                value_name: variantSku,
+              });
+            }
+          }
+        }
+        
         // Agregar otras propiedades como attribute_combinations
         Object.entries(variantAttrs).forEach(([key, value]) => {
           const upperKey = key.toUpperCase();
           // Solo agregar si no es COLOR o SIZE (ya los agregamos arriba)
           if (upperKey !== 'COLOR' && upperKey !== 'SIZE' && 
               key !== 'Talle' && key !== 'Talla' && 
-              upperKey !== 'GENDER' && upperKey !== 'MODEL') {
+              upperKey !== 'GENDER' && upperKey !== 'MODEL' &&
+              upperKey !== 'ITEM_CONDITION') {
             attributeCombinations.push({
               id: upperKey,
               value_name: String(value),
@@ -400,18 +463,18 @@ async function createProductInMeli(
         
         logger.debug(`Creando variación con SKU: ${variantSku}`, {
           sku: variantSku,
-          price: v.price,
+        price: v.price,
           stock: v.stock,
           attribute_combinations: attributeCombinations,
+          picture_ids: pictureIds,
         });
         
         return {
           seller_custom_field: variantSku, // SKU de la variación (el sistema viejo busca en seller_sku)
-          price: v.price,
-          available_quantity: v.stock,
-          attribute_combinations: attributeCombinations,
-          // No usar picture_ids si no hay imágenes subidas primero
-          // picture_ids: meliItem.pictures?.slice(0, 1).map((_: any, i: number) => `${i + 1}`) || [],
+          price: minPrice, // Precio de la variación (debe ser igual al item principal)
+        available_quantity: v.stock,
+          attribute_combinations: attributeCombinations, // REQUERIDO: al menos uno
+          picture_ids: pictureIds, // REQUERIDO: entre 1 y 10 imágenes
         };
       });
     } else {
