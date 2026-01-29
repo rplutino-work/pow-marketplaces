@@ -73,9 +73,10 @@ export async function sendOrder(
       },
     };
 
-    logger.debug(`Enviando orden a: ${endpoint}`, { 
+    logger.info(`Enviando orden a: ${endpoint}`, { 
       external_id: order.external_id,
-      items_count: hermesPayload.order.items.length 
+      items_count: hermesPayload.order.items.length,
+      items: hermesPayload.order.items.map((i: any) => ({ sku: i.sku, quantity: i.quantity, price: i.price }))
     });
 
     const response = await fetch(endpoint, {
@@ -91,16 +92,54 @@ export async function sendOrder(
 
     clearTimeout(timeoutId);
 
-    if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ message: 'Error desconocido' })) as { message?: string };
-      throw new Error(errorData.message || `Error enviando orden: ${response.status}`);
+    // Parsear respuesta
+    const responseText = await response.text();
+    let result: any;
+    
+    try {
+      result = JSON.parse(responseText);
+    } catch (e) {
+      logger.error(`Error parseando respuesta de Hermes: ${responseText}`);
+      throw new Error(`Respuesta inválida de Hermes: ${response.status}`);
     }
 
-    const result = await response.json() as { order_id?: string; id?: string };
-    logger.info(`Orden enviada exitosamente a Hermes: ${result.order_id || result.id}`);
+    // Log de respuesta para debugging
+    logger.info(`Respuesta de Hermes (status ${response.status}):`, { 
+      success: result.success,
+      order_id: result.order_id,
+      id: result.id,
+      message: result.message,
+      error: result.error,
+      full_response: result
+    });
+
+    if (!response.ok) {
+      const errorMessage = result.message || result.error || `Error enviando orden: ${response.status}`;
+      logger.error(`Error enviando orden a Hermes: ${errorMessage}`, { 
+        status: response.status,
+        response: result 
+      });
+      throw new Error(errorMessage);
+    }
+
+    // Hermes retorna: { success: true, order_id: ..., external_id: ... }
+    // o puede retornar: { success: false, message: ... }
+    if (result.success === false) {
+      const errorMessage = result.message || 'Hermes rechazó la orden';
+      logger.warn(`Hermes rechazó la orden: ${errorMessage}`, { response: result });
+      throw new Error(errorMessage);
+    }
+
+    const orderId = result.order_id || result.id || null;
+    
+    if (!orderId) {
+      logger.warn(`Hermes no retornó order_id en la respuesta:`, { response: result });
+    } else {
+      logger.info(`Orden enviada exitosamente a Hermes: ${orderId}`);
+    }
     
     return {
-      order_id: result.order_id || result.id || 'unknown',
+      order_id: orderId || 'unknown',
       status: 'sent',
     };
 

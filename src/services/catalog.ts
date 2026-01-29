@@ -294,12 +294,21 @@ async function createProductInMeli(
     
     if (hasMultipleVariations) {
       // Producto con múltiples variaciones
+      // IMPORTANTE: Cada variación debe tener su SKU en seller_custom_field
+      // para que cuando llegue la orden, el sistema viejo pueda encontrarlo con item.dig('item','seller_sku')
       meliItem.variations = product.variations.map(v => {
         const variantSku = v.sku || v.identifier || '';
         const variantAttrs = v.attributes || v.properties || {};
         
+        logger.debug(`Creando variación con SKU: ${variantSku}`, {
+          sku: variantSku,
+          price: v.price,
+          stock: v.stock,
+          attributes: variantAttrs,
+        });
+        
         return {
-          seller_custom_field: variantSku,
+          seller_custom_field: variantSku, // SKU de la variación (el sistema viejo busca en seller_sku)
           price: v.price,
           available_quantity: v.stock,
           attribute_combinations: Object.entries(variantAttrs).map(([id, value]) => ({
@@ -311,11 +320,28 @@ async function createProductInMeli(
       });
     } else {
       // Producto simple (una sola variación)
+      // IMPORTANTE: Usar el SKU de la variación, no del producto principal
       const singleVariation = product.variations[0];
       const variantSku = singleVariation.sku || singleVariation.identifier || productSku;
+      
+      logger.debug(`Producto simple con SKU de variación: ${variantSku}`, {
+        product_sku: productSku,
+        variant_sku: variantSku,
+        price: singleVariation.price || product.price,
+        stock: singleVariation.stock || product.stock,
+      });
+      
       meliItem.price = singleVariation.price || product.price;
       meliItem.available_quantity = singleVariation.stock || product.stock;
-      meliItem.seller_custom_field = variantSku;
+      meliItem.seller_custom_field = variantSku; // SKU de la variación (el sistema viejo busca en seller_sku)
+      
+      // También actualizar el atributo SELLER_SKU con el SKU de la variación
+      const skuAttributeIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'SELLER_SKU');
+      if (skuAttributeIndex >= 0) {
+        meliItem.attributes[skuAttributeIndex].value_name = variantSku;
+      } else {
+        meliItem.attributes.push({ id: 'SELLER_SKU', value_name: variantSku });
+      }
     }
   } else {
     // Sin variaciones

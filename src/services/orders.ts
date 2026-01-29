@@ -411,14 +411,33 @@ export async function bulkRetryBlockedOrders(integrationId: string) {
 // ═══════════════════════════════════════════════════════════════════════════
 
 function transformOrderToHermes(meliOrder: any, integration: any) {
-  const items = meliOrder.order_items?.map((item: any) => ({
-    sku: item.item?.seller_sku || item.item?.seller_custom_field || item.item?.id,
+  const items = meliOrder.order_items?.map((item: any) => {
+    // Extraer SKU: priorizar seller_sku (como en el sistema viejo), luego seller_custom_field
+    // El sistema viejo usa: item.dig('item','seller_sku')
+    const sku = item.item?.seller_sku || item.item?.seller_custom_field || item.item?.id;
+    
+    logger.debug(`Transformando item de orden:`, {
+      item_id: item.item?.id,
+      seller_sku: item.item?.seller_sku,
+      seller_custom_field: item.item?.seller_custom_field,
+      sku_final: sku,
+      quantity: item.quantity,
+      unit_price: item.unit_price,
+    });
+    
+    return {
+      sku: String(sku), // Asegurar que sea string
     title: item.item?.title,
     quantity: item.quantity,
-    price: item.unit_price, // Precio unitario (Hermes espera 'price')
-    unit_price: item.unit_price, // Mantener para compatibilidad
+      price: item.unit_price, // Precio unitario (Hermes espera 'price')
+      unit_price: item.unit_price, // Mantener para compatibilidad
     total: item.unit_price * item.quantity,
-  })) || [];
+    };
+  }) || [];
+  
+  logger.info(`Items transformados para Hermes: ${items.length} items`, {
+    items: items.map(i => ({ sku: i.sku, quantity: i.quantity, price: i.price })),
+  });
 
   const shippingAddress = meliOrder.shipping?.receiver_address || {};
 
