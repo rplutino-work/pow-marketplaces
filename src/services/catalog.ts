@@ -314,11 +314,12 @@ async function createProductInMeli(
     genderValue = genderMap[genderRaw] || String(allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']);
   }
   
-  // Si no hay género en propiedades, usar "Unisex" como default para categorías de ropa
+  // Si no hay género en propiedades, usar "Mujer" como default para categorías de ropa
   // IMPORTANTE: GENDER es obligatorio para categorías de ropa (MLA414238, MLA417370, etc.)
+  // NOTA: "Unisex" no es válido para todas las categorías, usar "Mujer" como default más seguro
   if (hasVariations || meliCategoryId.startsWith('MLA414') || meliCategoryId === 'MLA417370') {
     if (!genderValue) {
-      genderValue = 'Unisex'; // Default para categorías de ropa
+      genderValue = 'Mujer'; // Default para categorías de ropa (más seguro que "Unisex")
       logger.info(`GENDER no encontrado en propiedades, usando default: ${genderValue}`);
     }
     baseAttributes.push({ id: 'GENDER', value_name: genderValue });

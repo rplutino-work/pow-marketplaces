@@ -60,8 +60,27 @@ export async function processOrderFromWebhook(
   const credential = integration.credentials[0];
   let accessToken: string | null = null;
 
+  // Intentar obtener access_token desde múltiples fuentes
+  // 1. Desde access_token (puede estar encriptado)
   if (credential.access_token) {
-    accessToken = decrypt(credential.access_token);
+    try {
+      accessToken = decrypt(credential.access_token);
+    } catch {
+      // Si falla el decrypt, puede que ya esté en texto plano (legacy)
+      accessToken = credential.access_token;
+    }
+  }
+
+  // 2. Si no está disponible, intentar desde credentials_encrypted
+  if (!accessToken && credential.credentials_encrypted) {
+    try {
+      const decrypted = JSON.parse(credential.credentials_encrypted);
+      if (decrypted.access_token) {
+        accessToken = decrypted.access_token;
+      }
+    } catch (e) {
+      logger.warn(`Error parseando credentials_encrypted para integración ${integrationId}: ${e}`);
+    }
   }
 
   if (!accessToken) {
