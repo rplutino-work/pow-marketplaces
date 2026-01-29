@@ -364,30 +364,31 @@ async function createProductInMeli(
       
       // Preparar picture_ids para las variaciones (necesitan entre 1 y 10 imágenes)
       // IMPORTANTE: MercadoLibre requiere que cada variación tenga entre 1 y 10 picture_ids
-      // Los picture_ids son índices 1-based de las imágenes del item principal
+      // Los picture_ids son los IDs de las imágenes después de subirlas a MercadoLibre
+      // Por ahora, usamos índices 1-based como strings, pero MercadoLibre los convertirá
       const pictureIds: string[] = [];
       const totalPictures = meliItem.pictures ? meliItem.pictures.length : 0;
       
       if (totalPictures > 0) {
         // Usar hasta 10 imágenes (máximo permitido por variación)
+        // IMPORTANTE: Los picture_ids deben ser strings con al menos 4 caracteres
+        // Usamos formato "0001", "0002", etc. para cumplir con el requisito
         const maxPictures = Math.min(totalPictures, 10);
         for (let i = 0; i < maxPictures; i++) {
-          pictureIds.push(String(i + 1)); // MercadoLibre usa índices 1-indexed
+          // Formatear con padding a 4 dígitos: "0001", "0002", etc.
+          pictureIds.push(String(i + 1).padStart(4, '0'));
         }
       } else {
-        // Si no hay imágenes en el item principal, esto es un problema
-        // Pero MercadoLibre requiere al menos 1 picture_id, así que usamos '1'
-        // Nota: Esto puede fallar si realmente no hay imágenes
-        logger.warn(`Producto ${productSku} sin imágenes - usando picture_id '1' como fallback`);
-        pictureIds.push('1');
+        // Si no hay imágenes, no podemos crear variaciones
+        throw new Error(`Producto ${productSku} sin imágenes - no se pueden crear variaciones sin imágenes`);
       }
       
       // Validar que tenemos al menos 1 picture_id
       if (pictureIds.length === 0) {
-        logger.warn(`No se pudieron generar picture_ids para producto ${productSku} - usando fallback`);
-        pictureIds.push('1');
+        throw new Error(`No se pudieron generar picture_ids para producto ${productSku}`);
       }
       
+      // Filtrar variaciones que no tienen attribute_combinations válidos
       meliItem.variations = product.variations.map((v, index) => {
         const variantSku = v.sku || v.identifier || '';
         const variantAttrs = v.attributes || v.properties || {};
@@ -414,35 +415,31 @@ async function createProductInMeli(
         
         // Si no hay COLOR ni SIZE, crear atributos diferenciadores
         // IMPORTANTE: MercadoLibre requiere al menos un attribute_combination válido
+        // IMPORTANTE: NO usar SELLER_SKU, BRAND, MODEL, GENDER en attribute_combinations
+        // porque estos ya están en item.attributes y no se pueden duplicar
         if (attributeCombinations.length === 0) {
-          // Si no hay propiedades diferenciadoras, usar el SKU como diferenciador
-          // Pero necesitamos un atributo válido de MercadoLibre
-          // Usar BRAND o MODEL como fallback si están disponibles
-          if (allProperties['Brand'] || allProperties['BRAND'] || product.brand) {
-            attributeCombinations.push({
-              id: 'BRAND',
-              value_name: String(allProperties['Brand'] || allProperties['BRAND'] || product.brand || 'Genérica'),
-            });
-          }
+          // Intentar usar cualquier propiedad disponible como diferenciador
+          // que NO esté ya en item.attributes
+          const attributesInItem = baseAttributes.map((attr: any) => attr.id);
+          const firstProperty = Object.entries(variantAttrs).find(([key]) => {
+            const upperKey = key.toUpperCase();
+            return !attributesInItem.includes(upperKey) && 
+                   upperKey !== 'SELLER_SKU' && 
+                   upperKey !== 'BRAND' && 
+                   upperKey !== 'MODEL' && 
+                   upperKey !== 'GENDER';
+          });
           
-          // Si aún no hay atributos, usar un atributo genérico válido
-          // Nota: Esto puede fallar si MercadoLibre no acepta este atributo para esta categoría
-          if (attributeCombinations.length === 0) {
-            // Intentar usar cualquier propiedad disponible como diferenciador
-            const firstProperty = Object.entries(variantAttrs)[0];
-            if (firstProperty) {
-              attributeCombinations.push({
-                id: firstProperty[0].toUpperCase(),
-                value_name: String(firstProperty[1]),
-              });
-            } else {
-              // Último recurso: usar el SKU como valor de un atributo genérico
-              // Esto puede no funcionar, pero es mejor que no tener nada
-              attributeCombinations.push({
-                id: 'SELLER_SKU',
-                value_name: variantSku,
-              });
-            }
+          if (firstProperty) {
+            attributeCombinations.push({
+              id: firstProperty[0].toUpperCase(),
+              value_name: String(firstProperty[1]),
+            });
+          } else {
+            // Si no hay propiedades diferenciadoras válidas, no podemos crear variaciones
+            // Esto debería ser manejado antes, pero por seguridad lanzamos un error
+            logger.warn(`Variación ${variantSku} sin atributos diferenciadores válidos - se omitirá`);
+            return null; // Retornar null para filtrar esta variación
           }
         }
         
@@ -476,7 +473,12 @@ async function createProductInMeli(
           attribute_combinations: attributeCombinations, // REQUERIDO: al menos uno
           picture_ids: pictureIds, // REQUERIDO: entre 1 y 10 imágenes
         };
-      });
+      }).filter((v: any) => v !== null); // Filtrar variaciones nulas
+      
+      // Si después de filtrar no quedan variaciones válidas, no crear el producto con variaciones
+      if (meliItem.variations.length === 0) {
+        throw new Error('No hay variaciones válidas con attribute_combinations requeridos');
+      }
     } else {
       // Producto simple (una sola variación)
       // IMPORTANTE: Usar el SKU de la variación, no del producto principal
