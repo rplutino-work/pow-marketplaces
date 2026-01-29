@@ -31,13 +31,11 @@ import { logger } from '../utils/logger';
  * - etc.
  */
 const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
-  // Por ahora, todas las categorías de Hermes se mapean a indumentaria
-  // MLA3530 = Hogar > Decoración (categoría hoja que NO requiere SIZE_GRID_ID)
-  // IMPORTANTE: Las categorías de ropa (MLA417370, etc.) requieren SIZE_GRID_ID
-  // que debe estar configurado en la cuenta del vendedor en MercadoLibre
-  // Por ahora usamos MLA3530 como default para evitar el error de SIZE_GRID_ID
-  // TODO: Cuando el usuario configure SIZE_GRID_ID, cambiar a categorías de ropa
-  default: 'MLA3530',
+  // Mapeo de categorías de Hermes a categorías de MercadoLibre
+  // MLA417370 = Remeras (categoría de ropa que acepta COLOR y SIZE)
+  // IMPORTANTE: Esta categoría puede requerir SIZE_GRID_ID, pero primero intentamos sin él
+  // Si falla, el usuario deberá configurar SIZE_GRID_ID en su cuenta de MercadoLibre
+  default: 'MLA417370', // Remeras - categoría de ropa que acepta COLOR y SIZE
 };
 
 /**
@@ -377,30 +375,17 @@ async function createProductInMeli(
       const minPrice = Math.min(...prices);
       meliItem.price = minPrice; // Usar el precio mínimo para el item principal
       
-      // Preparar picture_ids para las variaciones (necesitan entre 1 y 10 imágenes)
-      // IMPORTANTE: MercadoLibre requiere que cada variación tenga entre 1 y 10 picture_ids
-      // Los picture_ids son los IDs de las imágenes después de subirlas a MercadoLibre
-      // Por ahora, usamos índices 1-based como strings, pero MercadoLibre los convertirá
-      const pictureIds: string[] = [];
+      // IMPORTANTE: picture_ids son los IDs reales de las imágenes después de subirlas a MercadoLibre
+      // No podemos usar índices porque MercadoLibre requiere los IDs reales
+      // Por ahora, NO incluimos picture_ids - MercadoLibre usará las imágenes del item principal
+      // Si la categoría requiere picture_ids, necesitaremos subir las imágenes primero y obtener sus IDs
+      // Para categorías de ropa, esto puede ser opcional dependiendo de la categoría
+      const pictureIds: string[] = []; // Dejar vacío - MercadoLibre usará imágenes del item principal
+      
+      // Validar que tenemos imágenes en el item principal
       const totalPictures = meliItem.pictures ? meliItem.pictures.length : 0;
-      
-      if (totalPictures > 0) {
-        // Usar hasta 10 imágenes (máximo permitido por variación)
-        // IMPORTANTE: Los picture_ids deben ser strings con al menos 4 caracteres
-        // Usamos formato "0001", "0002", etc. para cumplir con el requisito
-        const maxPictures = Math.min(totalPictures, 10);
-        for (let i = 0; i < maxPictures; i++) {
-          // Formatear con padding a 4 dígitos: "0001", "0002", etc.
-          pictureIds.push(String(i + 1).padStart(4, '0'));
-        }
-      } else {
-        // Si no hay imágenes, no podemos crear variaciones
+      if (totalPictures === 0) {
         throw new Error(`Producto ${productSku} sin imágenes - no se pueden crear variaciones sin imágenes`);
-      }
-      
-      // Validar que tenemos al menos 1 picture_id
-      if (pictureIds.length === 0) {
-        throw new Error(`No se pudieron generar picture_ids para producto ${productSku}`);
       }
       
       // Filtrar variaciones que no tienen attribute_combinations válidos
@@ -422,6 +407,7 @@ async function createProductInMeli(
         const attributeCombinations: any[] = [];
         
         // Buscar COLOR con diferentes nombres posibles
+        // IMPORTANTE: Solo usar COLOR si la categoría lo acepta
         const colorKeys = Object.keys(variantAttrs).filter(key => 
           /color|colour|cor/i.test(key)
         );
@@ -433,11 +419,12 @@ async function createProductInMeli(
               id: 'COLOR',
               value_name: String(colorValue),
             });
-            logger.debug(`Color encontrado en propiedad '${colorKey}': ${colorValue}`);
+            logger.info(`Color encontrado en propiedad '${colorKey}': ${colorValue}`);
           }
         }
         
         // Buscar SIZE/TALLE con diferentes nombres posibles
+        // IMPORTANTE: Solo usar SIZE si la categoría lo acepta
         const sizeKeys = Object.keys(variantAttrs).filter(key => 
           /talle|talla|size|tamaño|tamano/i.test(key)
         );
@@ -449,7 +436,7 @@ async function createProductInMeli(
               id: 'SIZE',
               value_name: String(sizeValue),
             });
-            logger.debug(`Talle encontrado en propiedad '${sizeKey}': ${sizeValue}`);
+            logger.info(`Talle encontrado en propiedad '${sizeKey}': ${sizeValue}`);
           }
         }
         
@@ -516,13 +503,20 @@ async function createProductInMeli(
           picture_ids: pictureIds,
         });
         
-        return {
+        const variation: any = {
           seller_custom_field: variantSku, // SKU de la variación (el sistema viejo busca en seller_sku)
           price: minPrice, // Precio de la variación (debe ser igual al item principal)
-        available_quantity: v.stock,
+          available_quantity: v.stock,
           attribute_combinations: attributeCombinations, // REQUERIDO: al menos uno
-          picture_ids: pictureIds, // REQUERIDO: entre 1 y 10 imágenes
         };
+        
+        // Solo agregar picture_ids si tenemos IDs reales (no índices)
+        // Por ahora, dejamos que MercadoLibre use las imágenes del item principal
+        // if (pictureIds.length > 0) {
+        //   variation.picture_ids = pictureIds;
+        // }
+        
+        return variation;
       }).filter((v: any) => v !== null); // Filtrar variaciones nulas
       
       // Si después de filtrar no quedan variaciones válidas, crear el producto como simple
