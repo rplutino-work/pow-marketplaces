@@ -317,7 +317,8 @@ async function createProductInMeli(
   }
 
   // SIZE_GRID_ID - Obtener de ajustes_default de la integración (requerido para categorías de ropa)
-  // Este ID debe estar configurado en ajustes_default como JSON: {"size_grid_id": "sizegrid1"}
+  // Este ID debe estar configurado en ajustes_default como JSON: {"size_grid_id": "123456"}
+  // IMPORTANTE: SIZE_GRID_ID debe ser el ID numérico de MercadoLibre, NO el nombre de la tabla
   // IMPORTANTE: SIZE_GRID_ID debe estar en los atributos del item principal, NO en las variaciones
   if (hasVariations && meliCategoryId === 'MLA417370') {
     try {
@@ -330,19 +331,100 @@ async function createProductInMeli(
       if (integration?.ajustes_default) {
         const ajustes = JSON.parse(integration.ajustes_default);
         if (ajustes.size_grid_id) {
-          baseAttributes.push({ 
-            id: 'SIZE_GRID_ID', 
-            value_name: String(ajustes.size_grid_id) 
-          });
-          logger.info(`SIZE_GRID_ID agregado desde configuración: ${ajustes.size_grid_id}`);
+          // IMPORTANTE: SIZE_GRID_ID debe ser un value_id (número), no value_name (string)
+          // Si viene como string numérico, usarlo directamente
+          // Si viene como nombre (ej: "sizegrid1"), necesitamos obtener el ID real
+          const sizeGridId = String(ajustes.size_grid_id);
+          
+          // Verificar si es un número (ID válido) o un nombre
+          if (/^\d+$/.test(sizeGridId)) {
+            // Es un ID numérico válido
+            // IMPORTANTE: Para SIZE_GRID_ID, MercadoLibre puede requerir solo value_id
+            // pero algunos casos requieren también value_name
+            // Intentar obtener value_name desde la API si es necesario
+            try {
+              // Obtener atributos de la categoría para verificar el formato correcto
+              logger.debug(`Obteniendo atributos de la categoría ${meliCategoryId} para verificar SIZE_GRID_ID`);
+              const categoryAttrs = await meliService.getCategoryAttributes(meliCategoryId);
+              
+              logger.debug(`Atributos obtenidos de la categoría: ${categoryAttrs.length} atributos`);
+              
+              const sizeGridAttrDef = categoryAttrs.find((attr: any) => attr.id === 'SIZE_GRID_ID');
+              
+              if (sizeGridAttrDef) {
+                logger.debug(`SIZE_GRID_ID encontrado en atributos de la categoría:`, {
+                  id: sizeGridAttrDef.id,
+                  name: sizeGridAttrDef.name,
+                  values_count: sizeGridAttrDef.values?.length || 0,
+                  values_sample: sizeGridAttrDef.values?.slice(0, 5).map((v: any) => ({ id: v.id, name: v.name })),
+                });
+                
+                // Buscar el value_name correspondiente al value_id
+                const validValue = sizeGridAttrDef.values?.find((v: any) => String(v.id) === String(sizeGridId));
+                
+                if (validValue) {
+                  // Usar value_id y value_name si está disponible
+                  baseAttributes.push({ 
+                    id: 'SIZE_GRID_ID', 
+                    value_id: sizeGridId,
+                    value_name: validValue.name || sizeGridId,
+                  });
+                  logger.info(`SIZE_GRID_ID agregado: ${sizeGridId} (value_id) con value_name: ${validValue.name}`);
+                } else {
+                  // Si no encontramos el value_name, listar los valores válidos disponibles
+                  logger.warn(`SIZE_GRID_ID ${sizeGridId} no encontrado en valores válidos de la categoría.`, {
+                    configured_id: sizeGridId,
+                    valid_values: sizeGridAttrDef.values?.map((v: any) => ({ id: v.id, name: v.name })) || [],
+                    note: 'Usando solo value_id, pero puede fallar si el ID no es válido para esta categoría',
+                  });
+                  
+                  // Intentar usar solo value_id
+                  baseAttributes.push({ 
+                    id: 'SIZE_GRID_ID', 
+                    value_id: sizeGridId,
+                  });
+                }
+              } else {
+                // Si no hay definición del atributo, puede que la categoría no requiera SIZE_GRID_ID
+                logger.warn(`SIZE_GRID_ID no encontrado en atributos de la categoría ${meliCategoryId}.`, {
+                  category_id: meliCategoryId,
+                  note: 'La categoría puede no requerir SIZE_GRID_ID, o el atributo tiene otro nombre',
+                  available_attributes: categoryAttrs.map((attr: any) => attr.id).filter((id: string) => id.includes('SIZE') || id.includes('GRID')),
+                });
+                
+                // Intentar usar solo value_id de todas formas
+                baseAttributes.push({ 
+                  id: 'SIZE_GRID_ID', 
+                  value_id: sizeGridId,
+                });
+              }
+            } catch (error: any) {
+              // Si falla obtener los atributos, usar solo value_id
+              logger.warn(`No se pudo obtener atributos de la categoría: ${error.message}. Usando SIZE_GRID_ID con solo value_id.`, {
+                error: error.message,
+                stack: error.stack,
+              });
+              baseAttributes.push({ 
+                id: 'SIZE_GRID_ID', 
+                value_id: sizeGridId,
+              });
+            }
+            
+            logger.debug(`Atributo SIZE_GRID_ID completo:`, baseAttributes[baseAttributes.length - 1]);
+          } else {
+            // Es un nombre, necesitamos el ID real
+            logger.error(`SIZE_GRID_ID configurado como nombre "${sizeGridId}" pero necesita ser un ID numérico. El ID se encuentra en la URL de la tabla de talles: https://www.mercadolibre.com.ar/moda/noindex/guia-de-talles/ID`);
+            throw new Error(`SIZE_GRID_ID inválido: "${sizeGridId}". Debe ser un ID numérico de MercadoLibre (ej: 4511198), no un nombre.`);
+          }
         } else {
-          logger.warn(`SIZE_GRID_ID no configurado en ajustes_default. Agregar: {"size_grid_id": "sizegrid1"}`);
+          logger.warn(`SIZE_GRID_ID no configurado en ajustes_default. Agregar: {"size_grid_id": "ID_NUMERICO"}`);
         }
       } else {
-        logger.warn(`ajustes_default no configurado para integración ${integrationId}. Agregar: {"size_grid_id": "sizegrid1"}`);
+        logger.warn(`ajustes_default no configurado para integración ${integrationId}. Agregar: {"size_grid_id": "ID_NUMERICO"}`);
       }
     } catch (error) {
-      logger.warn(`No se pudo obtener SIZE_GRID_ID de la integración: ${error}`);
+      logger.error(`Error obteniendo SIZE_GRID_ID: ${error}`);
+      throw error; // Re-lanzar para que falle claramente
     }
   }
   
@@ -376,6 +458,7 @@ async function createProductInMeli(
     id: product.id,
     sku: productSku,
     title: productTitle,
+    category_id: meliCategoryId,
     variations_count: product.variations?.length || 0,
     variations_sample: product.variations?.slice(0, 2).map((v: any) => ({
       sku: v.sku,
@@ -384,6 +467,13 @@ async function createProductInMeli(
       properties_keys: v.properties ? Object.keys(v.properties) : [],
       attributes_keys: v.attributes ? Object.keys(v.attributes) : [],
     })),
+  });
+  
+  // Log de atributos antes de enviar
+  logger.debug(`Atributos que se enviarán a MercadoLibre:`, {
+    category_id: meliCategoryId,
+    attributes: baseAttributes,
+    attributes_count: baseAttributes.length,
   });
 
   // Manejar variaciones
@@ -632,8 +722,60 @@ async function createProductInMeli(
   }
 
   // Crear el producto en MercadoLibre
-  await meliService.createItem(meliItem, accessToken);
-  logger.info(`Producto creado en ML: ${productSku}`);
+  try {
+    await meliService.createItem(meliItem, accessToken);
+    logger.info(`Producto creado en ML: ${productSku}`);
+  } catch (error: any) {
+    // Si falla por SIZE_GRID_ID inválido, intentar sin variaciones o con otra categoría
+    if (error.message?.includes('SIZE_GRID_ID') || error.message?.includes('size_grid')) {
+      logger.warn(`Error con SIZE_GRID_ID, intentando crear producto sin variaciones o con categoría alternativa`);
+      
+      // Remover SIZE_GRID_ID de los atributos
+      const sizeGridIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'SIZE_GRID_ID');
+      if (sizeGridIndex >= 0) {
+        meliItem.attributes.splice(sizeGridIndex, 1);
+        logger.info(`SIZE_GRID_ID removido de atributos`);
+      }
+      
+      // Si tiene variaciones, intentar crear como producto simple
+      if (meliItem.variations && meliItem.variations.length > 0) {
+        logger.info(`Intentando crear como producto simple (sin variaciones) debido a error de SIZE_GRID_ID`);
+        
+        // Usar la primera variación como producto simple
+        const firstVariation = product.variations?.[0];
+        if (firstVariation) {
+          const variantSku = firstVariation.sku || firstVariation.identifier || productSku;
+          meliItem.price = firstVariation.price || product.price;
+          meliItem.available_quantity = firstVariation.stock || product.stock;
+          meliItem.seller_custom_field = variantSku;
+          
+          // Actualizar SELLER_SKU
+          const skuAttributeIndex = meliItem.attributes.findIndex((attr: any) => attr.id === 'SELLER_SKU');
+          if (skuAttributeIndex >= 0) {
+            meliItem.attributes[skuAttributeIndex].value_name = variantSku;
+          }
+          
+          // Remover variaciones
+          delete meliItem.variations;
+          
+          // Cambiar a categoría que no requiere SIZE_GRID_ID
+          meliItem.category_id = 'MLA3530'; // Hogar > Decoración (no requiere SIZE_GRID_ID)
+          logger.info(`Categoría cambiada a MLA3530 (no requiere SIZE_GRID_ID)`);
+        }
+      } else {
+        // Si no tiene variaciones, cambiar a categoría que no requiere SIZE_GRID_ID
+        meliItem.category_id = 'MLA3530'; // Hogar > Decoración
+        logger.info(`Categoría cambiada a MLA3530 (no requiere SIZE_GRID_ID)`);
+      }
+      
+      // Intentar crear nuevamente
+      await meliService.createItem(meliItem, accessToken);
+      logger.info(`Producto creado en ML (sin SIZE_GRID_ID): ${productSku}`);
+    } else {
+      // Si no es un error de SIZE_GRID_ID, re-lanzar el error
+      throw error;
+    }
+  }
 }
 
 async function updateProductInMeli(
