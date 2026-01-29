@@ -62,11 +62,15 @@ async function handleMercadoLibreWebhook(req: Request, res: Response) {
   try {
     const prisma = getPrisma();
 
-    // Buscar integración por user_id
-    const credential = await prisma.integrationCredential.findFirst({
+    // Buscar integración por user_id: preferir credencial con token vigente
+    const candidates = await prisma.integrationCredential.findMany({
       where: { user_id: String(webhook.user_id) },
       include: { integration: true },
+      orderBy: { updated_at: 'desc' },
+      take: 10,
     });
+    const now = new Date();
+    const credential = candidates.find((c) => c.expires_at && c.expires_at > now) ?? candidates[0];
 
     if (!credential) {
       logger.warn(`No se encontró integración para user_id: ${webhook.user_id}`);
@@ -107,7 +111,15 @@ async function handleMercadoLibreWebhook(req: Request, res: Response) {
       case 'shipments':
         await processShipmentWebhook(integrationId, webhook);
         break;
-      
+
+      case 'payments':
+        await processPaymentWebhook(integrationId, webhook);
+        break;
+
+      case 'stock-locations':
+        await processStockLocationsWebhook(integrationId, webhook);
+        break;
+
       default:
         logger.info(`Topic no manejado: ${webhook.topic}`);
     }
@@ -187,13 +199,43 @@ async function processMessageWebhook(integrationId: string, webhook: any) {
 
 async function processShipmentWebhook(integrationId: string, webhook: any) {
   logger.info(`🚚 Procesando webhook de envío: ${webhook.resource}`);
-  
+
   const prisma = getPrisma();
-  
+
   await prisma.syncLog.create({
     data: {
       integration_id: integrationId,
       tipo: 'shipment_update',
+      detalle: JSON.stringify(webhook),
+      resultado: 'success',
+    },
+  });
+}
+
+async function processPaymentWebhook(integrationId: string, webhook: any) {
+  logger.info(`💰 Webhook de pago recibido: ${webhook.resource}`);
+
+  const prisma = getPrisma();
+
+  await prisma.syncLog.create({
+    data: {
+      integration_id: integrationId,
+      tipo: 'payment_webhook',
+      detalle: JSON.stringify(webhook),
+      resultado: 'success',
+    },
+  });
+}
+
+async function processStockLocationsWebhook(integrationId: string, webhook: any) {
+  logger.info(`📦 Webhook de stock-locations recibido: ${webhook.resource}`);
+
+  const prisma = getPrisma();
+
+  await prisma.syncLog.create({
+    data: {
+      integration_id: integrationId,
+      tipo: 'stock_locations_webhook',
       detalle: JSON.stringify(webhook),
       resultado: 'success',
     },

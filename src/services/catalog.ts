@@ -340,10 +340,10 @@ async function createProductInMeli(
   // Este ID debe estar configurado en ajustes_default como JSON: {"size_grid_id": "123456"}
   // IMPORTANTE: SIZE_GRID_ID debe ser el ID numérico de MercadoLibre, NO el nombre de la tabla
   // IMPORTANTE: SIZE_GRID_ID debe estar en los atributos del item principal, NO en las variaciones
-  // NOTA: MLA109282 (Ropa y Accesorios > Otros) NO requiere SIZE_GRID_ID, pero otras categorías sí.
-  // Solo agregar SIZE_GRID_ID si la categoría lo requiere (no MLA109282)
+  // NOTA: Todas las categorías de ropa con variaciones requieren SIZE_GRID_ID
+  // Incluyendo MLA109282 (Ropa y Accesorios > Otros)
   // Si falla, el fallback intentará crear el producto sin SIZE_GRID_ID
-  if (hasVariations && meliCategoryId !== 'MLA109282' && (meliCategoryId === 'MLA417370' || meliCategoryId.startsWith('MLA414'))) {
+  if (hasVariations && (meliCategoryId === 'MLA109282' || meliCategoryId === 'MLA417370' || meliCategoryId.startsWith('MLA414'))) {
     try {
       const prisma = getPrisma();
       const integration = await prisma.integration.findUnique({
