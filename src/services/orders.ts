@@ -436,7 +436,11 @@ function transformOrderToHermes(meliOrder: any, integration: any) {
   }) || [];
   
   logger.info(`Items transformados para Hermes: ${items.length} items`, {
-    items: items.map(i => ({ sku: i.sku, quantity: i.quantity, price: i.price })),
+    items: items.map((i: { sku: string; quantity: number; price: number }) => ({ 
+      sku: i.sku, 
+      quantity: i.quantity, 
+      price: i.price 
+    })),
   });
 
   const shippingAddress = meliOrder.shipping?.receiver_address || {};
