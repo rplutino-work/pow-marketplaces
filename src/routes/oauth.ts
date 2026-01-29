@@ -15,16 +15,18 @@ const router = Router();
  * 
  * Hermes redirige aquí para vincular cuenta de MercadoLibre.
  * Query params:
- *   - hermes_integration_id: ID de la integración en Hermes
+ *   - integration_id o hermes_integration_id: ID de la integración en Hermes
  *   - hermes_url: URL de la instancia de Hermes
  */
 router.get('/meli/link', async (req: Request, res: Response) => {
   try {
-    const { hermes_integration_id, hermes_url } = req.query;
+    // Aceptar tanto integration_id como hermes_integration_id (compatibilidad)
+    const hermes_integration_id = req.query.hermes_integration_id || req.query.integration_id;
+    const hermes_url = req.query.hermes_url;
 
     if (!hermes_integration_id || !hermes_url) {
       return res.status(400).json({
-        error: 'Se requiere hermes_integration_id y hermes_url',
+        error: 'Se requiere integration_id (o hermes_integration_id) y hermes_url',
       });
     }
 
