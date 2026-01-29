@@ -32,10 +32,12 @@ import { logger } from '../utils/logger';
  */
 const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
   // Por ahora, todas las categorías de Hermes se mapean a indumentaria
-  // MLA417370 = Remeras (categoría hoja/leaf de indumentaria en ML)
-  // IMPORTANTE: MLA1430 es una categoría padre, no se puede usar directamente
-  // Usamos MLA417370 (Remeras) como default porque es una categoría hoja válida
-  default: 'MLA417370',
+  // MLA3530 = Hogar > Decoración (categoría hoja que NO requiere SIZE_GRID_ID)
+  // IMPORTANTE: Las categorías de ropa (MLA417370, etc.) requieren SIZE_GRID_ID
+  // que debe estar configurado en la cuenta del vendedor en MercadoLibre
+  // Por ahora usamos MLA3530 como default para evitar el error de SIZE_GRID_ID
+  // TODO: Cuando el usuario configure SIZE_GRID_ID, cambiar a categorías de ropa
+  default: 'MLA3530',
 };
 
 /**
@@ -281,14 +283,24 @@ async function createProductInMeli(
   }
 
   // Mapear propiedades comunes a atributos de MercadoLibre
-  // GENDER (Género)
+  // GENDER (Género) - solo agregar si hay un valor válido
+  // Valores válidos en MercadoLibre: "Mujer", "Hombre", "Unisex", "Niño", "Niña"
+  const genderMap: Record<string, string> = {
+    'mujer': 'Mujer',
+    'hombre': 'Hombre',
+    'unisex': 'Unisex',
+    'niño': 'Niño',
+    'niña': 'Niña',
+    'nino': 'Niño',
+    'nina': 'Niña',
+  };
+  
   if (allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']) {
-    const gender = allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER'];
-    baseAttributes.push({ id: 'GENDER', value_name: String(gender) });
-  } else {
-    // Default: Sin género específico (puede ser unisex)
-    baseAttributes.push({ id: 'GENDER', value_name: 'Sin género específico' });
+    const genderRaw = String(allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']).toLowerCase();
+    const genderValue = genderMap[genderRaw] || String(allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']);
+    baseAttributes.push({ id: 'GENDER', value_name: genderValue });
   }
+  // Si no hay género, no agregarlo (algunas categorías no lo requieren)
 
   // MODEL (Modelo) - usar el título del producto si no hay modelo específico
   if (allProperties['Modelo'] || allProperties['MODEL']) {
@@ -300,6 +312,14 @@ async function createProductInMeli(
     // Usar el título como modelo
     baseAttributes.push({ id: 'MODEL', value_name: productTitle.substring(0, 50) });
   }
+
+  // SIZE_GRID_ID - Solo agregar si está disponible (requerido para categorías de ropa)
+  // Este ID debe estar configurado en la cuenta de MercadoLibre del vendedor
+  // Por ahora no lo agregamos automáticamente, el usuario debe configurarlo
+  // TODO: Agregar SIZE_GRID_ID como configuración de integración
+  // if (integration.size_grid_id) {
+  //   baseAttributes.push({ id: 'SIZE_GRID_ID', value_name: integration.size_grid_id });
+  // }
 
   // Construir item para MercadoLibre
   const meliItem: any = {
@@ -335,9 +355,10 @@ async function createProductInMeli(
       // IMPORTANTE: Cada variación debe tener su SKU en seller_custom_field
       // para que cuando llegue la orden, el sistema viejo pueda encontrarlo con item.dig('item','seller_sku')
       
-      // El precio del item principal debe ser el menor de las variaciones
-      const minPrice = Math.min(...product.variations.map(v => v.price));
-      meliItem.price = minPrice;
+      // El precio del item principal debe ser el MAYOR de las variaciones
+      // MercadoLibre requiere que el precio del item principal sea >= precio de variaciones
+      const maxPrice = Math.max(...product.variations.map(v => v.price));
+      meliItem.price = maxPrice;
       
       meliItem.variations = product.variations.map(v => {
         const variantSku = v.sku || v.identifier || '';
