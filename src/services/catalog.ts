@@ -17,27 +17,33 @@ import { logger } from '../utils/logger';
 
 interface HermesProduct {
   id: number | string;
-  identifier: string;
-  name: string;
+  sku?: string; // SKU del item (Hermes envía 'sku')
+  identifier?: string; // Alias para sku (compatibilidad)
+  title?: string; // Título del producto (Hermes envía 'title')
+  name?: string; // Alias para title (compatibilidad)
   description?: string;
+  brief_description?: string;
   price: number;
   stock: number;
-  category_id?: string;
+  category_id?: string | number;
   brand?: string;
-  pictures?: Array<{ url: string }>;
+  images?: string[]; // Array de URLs (Hermes envía 'images')
+  pictures?: Array<{ url: string }>; // Alias para images (compatibilidad)
   variations?: Array<{
-    id: string;
-    identifier: string;
-    attributes: Record<string, string>;
+    sku: string; // SKU de la variación (Hermes envía 'sku')
+    identifier?: string; // Alias para sku
+    properties?: Record<string, string>; // Propiedades de la variación (Hermes envía 'properties')
+    attributes?: Record<string, string>; // Alias para properties
     price: number;
     stock: number;
   }>;
   dimensions?: {
     width: number;
     height: number;
-    length: number;
-    weight: number;
+    depth?: number; // Hermes envía 'depth' en lugar de 'length'
+    length?: number; // Alias para depth
   };
+  weight?: number;
 }
 
 interface SyncResult {
@@ -103,8 +109,12 @@ export async function syncCatalog(params: {
   // Obtener SKUs de productos enviados
   const sentSkus = new Set<string>();
   params.products.forEach(p => {
-    sentSkus.add(p.identifier);
-    p.variations?.forEach(v => sentSkus.add(v.identifier));
+    const productSku = p.sku || p.identifier || String(p.id);
+    sentSkus.add(productSku);
+    p.variations?.forEach(v => {
+      const variantSku = v.sku || v.identifier || '';
+      if (variantSku) sentSkus.add(variantSku);
+    });
   });
 
   // Si close_missing está activo, cerrar productos no incluidos
@@ -124,11 +134,12 @@ export async function syncCatalog(params: {
 
     } catch (error: any) {
       result.failed++;
+      const productSku = product.sku || product.identifier || String(product.id);
       result.errors.push({
-        sku: product.identifier,
+        sku: productSku,
         error: error.message,
       });
-      logger.error(`Error sincronizando ${product.identifier}: ${error.message}`);
+      logger.error(`Error sincronizando ${productSku}: ${error.message}`);
     }
   }
 
@@ -162,8 +173,11 @@ async function syncProduct(
   accessToken: string
 ): Promise<{ created: boolean; updated: boolean }> {
   
+  // Obtener SKU del producto
+  const productSku = product.sku || product.identifier || String(product.id);
+  
   // Buscar si existe en ML
-  const existingItem = await meliService.findItemBySku(userId, product.identifier, accessToken);
+  const existingItem = await meliService.findItemBySku(userId, productSku, accessToken);
 
   if (existingItem) {
     // Actualizar existente
@@ -181,28 +195,36 @@ async function createProductInMeli(
   accessToken: string
 ): Promise<void> {
   
+  // Obtener campos con fallbacks
+  const productTitle = product.title || product.name || 'Producto sin título';
+  const productSku = product.sku || product.identifier || String(product.id);
+  const productDescription = product.description || product.brief_description || '';
+  
   // Construir item para MercadoLibre
   const meliItem: any = {
-    title: product.name.substring(0, 60),
-    category_id: product.category_id || 'MLA3530', // Categoría por defecto
+    title: productTitle.substring(0, 60),
+    category_id: String(product.category_id || 'MLA3530'), // Categoría por defecto
     currency_id: 'ARS',
     buying_mode: 'buy_it_now',
     listing_type_id: 'gold_pro',
     condition: 'new',
-    seller_custom_field: product.identifier,
-    description: { plain_text: product.description || '' },
-    pictures: product.pictures?.map(p => ({ source: p.url })) || [],
+    seller_custom_field: productSku,
+    description: { plain_text: productDescription },
+    pictures: (product.images?.map(url => ({ source: url })) || 
+               product.pictures?.map(p => ({ source: p.url })) || []),
     attributes: [
-      { id: 'SELLER_SKU', value_name: product.identifier },
+      { id: 'SELLER_SKU', value_name: productSku },
       { id: 'BRAND', value_name: product.brand || 'Genérica' },
     ],
   };
 
   // Agregar dimensiones si existen
   if (product.dimensions) {
-    const { width, height, length, weight } = product.dimensions;
+    const { width, height, depth, length } = product.dimensions;
+    const productLength = depth || length || 0;
+    const productWeight = product.weight || 0;
     meliItem.shipping = {
-      dimensions: `${width}x${length}x${height},${weight}`,
+      dimensions: `${width}x${productLength}x${height},${productWeight}`,
     };
   }
 
@@ -212,22 +234,28 @@ async function createProductInMeli(
     
     if (hasMultipleVariations) {
       // Producto con múltiples variaciones
-      meliItem.variations = product.variations.map(v => ({
-        seller_custom_field: v.identifier,
-        price: v.price,
-        available_quantity: v.stock,
-        attribute_combinations: Object.entries(v.attributes).map(([id, value]) => ({
-          id: id.toUpperCase(),
-          value_name: String(value),
-        })),
-        picture_ids: meliItem.pictures?.slice(0, 1).map((_: any, i: number) => `${i + 1}`) || [],
-      }));
+      meliItem.variations = product.variations.map(v => {
+        const variantSku = v.sku || v.identifier || '';
+        const variantAttrs = v.attributes || v.properties || {};
+        
+        return {
+          seller_custom_field: variantSku,
+          price: v.price,
+          available_quantity: v.stock,
+          attribute_combinations: Object.entries(variantAttrs).map(([id, value]) => ({
+            id: id.toUpperCase(),
+            value_name: String(value),
+          })),
+          picture_ids: meliItem.pictures?.slice(0, 1).map((_: any, i: number) => `${i + 1}`) || [],
+        };
+      });
     } else {
       // Producto simple (una sola variación)
       const singleVariation = product.variations[0];
+      const variantSku = singleVariation.sku || singleVariation.identifier || productSku;
       meliItem.price = singleVariation.price || product.price;
       meliItem.available_quantity = singleVariation.stock || product.stock;
-      meliItem.seller_custom_field = singleVariation.identifier || product.identifier;
+      meliItem.seller_custom_field = variantSku;
     }
   } else {
     // Sin variaciones
@@ -236,7 +264,7 @@ async function createProductInMeli(
   }
 
   await meliService.createItem(meliItem, accessToken);
-  logger.info(`Producto creado en ML: ${product.identifier}`);
+  logger.info(`Producto creado en ML: ${productSku}`);
 }
 
 async function updateProductInMeli(
@@ -258,8 +286,9 @@ async function updateProductInMeli(
     if (currentItem.variations?.length > 0) {
       // Actualizar variaciones existentes
       for (const variation of product.variations) {
+        const variantSku = variation.sku || variation.identifier || '';
         const existingVar = currentItem.variations.find(
-          (v: any) => v.seller_custom_field === variation.identifier
+          (v: any) => v.seller_custom_field === variantSku
         );
         
         if (existingVar) {
@@ -286,7 +315,8 @@ async function updateProductInMeli(
     await meliService.updateItem(itemId, updateData, accessToken);
   }
 
-  logger.info(`Producto actualizado en ML: ${product.identifier} (${itemId})`);
+  const productSku = product.sku || product.identifier || String(product.id);
+  logger.info(`Producto actualizado en ML: ${productSku} (${itemId})`);
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
