@@ -150,11 +150,12 @@ export async function processOrderFromWebhook(
         hermesOrder
       );
 
+      const hermesOrderIdStr = hermesResponse.order_id != null ? String(hermesResponse.order_id) : null;
       await prisma.order.update({
         where: { id: order.id },
         data: {
           status: 'sent_to_hermes',
-          hermes_order_id: hermesResponse.order_id,
+          hermes_order_id: hermesOrderIdStr,
           payload_normalized: JSON.stringify({
             ...meliOrder,
             transformations: rulesResult.result.transformations,
@@ -165,12 +166,12 @@ export async function processOrderFromWebhook(
       });
 
       await logOrderEvent(order.id, integrationId, 'order_sent_to_hermes', {
-        hermes_order_id: hermesResponse.order_id,
+        hermes_order_id: hermesOrderIdStr,
         applied_rules: rulesResult.result.applied_rules,
       });
 
-      logger.success(`Orden ${orderId} enviada a Hermes: ${hermesResponse.order_id}`);
-      return { success: true, hermes_order_id: hermesResponse.order_id };
+      logger.success(`Orden ${orderId} enviada a Hermes: ${hermesOrderIdStr}`);
+      return { success: true, hermes_order_id: hermesOrderIdStr };
     } else {
       // Hermes no configurado, marcar como procesada
       await prisma.order.update({
