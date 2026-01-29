@@ -1,0 +1,172 @@
+// Configuración del cliente Prisma para SQLite (desarrollo) / PostgreSQL (producción)
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// Tabla de marketplaces disponibles
+model Marketplace {
+  id                    String         @id @default(cuid())
+  name                  String         @unique
+  health_status         String         @default("unknown") // healthy, unhealthy, unknown
+  last_health_check_at  DateTime?
+  response_time_ms      Int?
+  created_at           DateTime       @default(now())
+  updated_at           DateTime       @updatedAt
+
+  // Relaciones
+  integrations         Integration[]
+  orders              Order[]
+
+  @@map("marketplaces")
+}
+
+// Tabla de integraciones por cliente
+model Integration {
+  id                    String               @id @default(cuid())
+  hermes_integration_id String               // ID de la integración en Hermes (ej: "2", "3", "10") - viene de MarketplaceIntegration.id
+  cliente_name          String?              // Nombre del cliente de Hermes (ej: "Cheeky", "Markova") - extraído del dominio
+  cliente_domain        String               // Dominio del cliente de Hermes (ej: "cheeky-hermes.com") - REQUERIDO para constraint único
+  marketplace_id        String
+  estado                String               @default("active") // active, inactive, suspended
+  ajustes_default       String?              // Configuraciones por defecto para esta integración (JSON como string)
+  
+  // Configuración de la instancia de Hermes para este cliente
+  hermes_api_url        String?              // URL de la instancia de Hermes del cliente (ej: http://cheeky-hermes.com)
+  hermes_token          String?              // Token de autenticación para esta instancia de Hermes
+  hermes_enabled        Boolean              @default(true)    // Si la integración con Hermes está habilitada
+  
+  created_at            DateTime             @default(now())
+  updated_at            DateTime             @updatedAt
+
+  // Relaciones
+  marketplace           Marketplace          @relation(fields: [marketplace_id], references: [id])
+  credentials           IntegrationCredential[]
+  rules                 IntegrationRule[]
+  orders                Order[]
+  sync_logs             SyncLog[]
+  sync_jobs             SyncJob[]
+
+  // Constraint único: hermes_integration_id es único POR CLIENTE (cliente_domain)
+  // Esto permite que:
+  // - Diferentes clientes puedan tener el mismo hermes_integration_id (ej: ambos tienen ID 2)
+  // - Un cliente puede tener múltiples integraciones del mismo marketplace
+  // - Dentro de un mismo cliente, no puede haber duplicados de hermes_integration_id
+  @@unique([cliente_domain, hermes_integration_id])
+  @@index([cliente_name]) // Índice para búsquedas rápidas por nombre
+  @@index([cliente_domain]) // Índice para búsquedas rápidas por dominio
+  @@map("integrations")
+}
+
+// Tabla de credenciales encriptadas por integración
+model IntegrationCredential {
+  id                      String      @id @default(cuid())
+  integration_id          String
+  credentials_encrypted   String      // JSON encriptado con tokens, secrets, etc.
+  access_token            String?     // Token de acceso (encriptado) para acceso rápido
+  refresh_token           String?     // Token de refresh OAuth2 (encriptado)
+  user_id                 String?     // user_id de MercadoLibre (no encriptado, para búsquedas rápidas de webhooks)
+  expires_at              DateTime?   // Timestamp de expiración del token
+  token_last_refreshed_at DateTime?
+  oauth_state             String?     // Estado OAuth2 para validación de seguridad
+  created_at              DateTime    @default(now())
+  updated_at              DateTime    @updatedAt
+
+  // Relaciones
+  integration             Integration @relation(fields: [integration_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id]) // Índice para búsquedas rápidas por user_id (webhooks)
+  @@map("integration_credentials")
+}
+
+// Tabla de reglas de negocio por integración
+model IntegrationRule {
+  id             String      @id @default(cuid())
+  integration_id String
+  rule_key       String      // exclude_skus, add_tag_to_order, multiply_price, cap_stock, etc.
+  rule_json      String      // Configuración específica de la regla (JSON como string)
+  enabled        Boolean     @default(true)
+  rule_type      String      // inbound, outbound
+  priority       Int         @default(0) // Para ordenar aplicación de reglas
+  created_at     DateTime    @default(now())
+  updated_at     DateTime    @updatedAt
+
+  // Relaciones
+  integration    Integration @relation(fields: [integration_id], references: [id], onDelete: Cascade)
+
+  @@unique([integration_id, rule_key, rule_type])
+  @@map("integration_rules")
+}
+
+// Tabla de órdenes procesadas
+model Order {
+  id                   String      @id @default(cuid())
+  integration_id       String
+  marketplace_id       String
+  source_order_id      String      // ID de la orden en el marketplace origen
+  payload_normalized   String      // Payload normalizado a formato interno (JSON como string)
+  status              String      @default("pending") // pending, processed, blocked_by_rule, failed, sent_to_hermes
+  flag_reason         String?     // Razón del bloqueo si status=blocked_by_rule
+  hermes_order_id     String?     // ID asignado por Hermes OMS
+  retry_count         Int         @default(0)
+  last_error          String?
+  created_at          DateTime    @default(now())
+  processed_at        DateTime?
+  updated_at          DateTime    @updatedAt
+
+  // Relaciones
+  integration         Integration @relation(fields: [integration_id], references: [id])
+  marketplace         Marketplace @relation(fields: [marketplace_id], references: [id])
+
+  @@unique([marketplace_id, source_order_id])
+  @@index([integration_id, status])
+  @@index([created_at])
+  @@map("orders")
+}
+
+// Tabla de logs de sincronización
+model SyncLog {
+  id             String      @id @default(cuid())
+  integration_id String
+  tipo           String      // webhook_received, order_sent, catalog_sync, etc.
+  detalle        String      // Detalles específicos del evento (JSON como string)
+  resultado      String      // success, error, warning
+  response_data  String?     // Respuesta del sistema externo (JSON como string)
+  created_at     DateTime    @default(now())
+
+  // Relaciones
+  integration    Integration @relation(fields: [integration_id], references: [id])
+
+  @@index([integration_id, tipo])
+  @@index([created_at])
+  @@map("sync_logs")
+}
+
+// Tabla de trabajos de sincronización
+model SyncJob {
+  id             String      @id @default(cuid())
+  integration_id String
+  job_type       String      // catalog_sync, stock_update, price_update, order_reconciliation
+  payload        String      // Datos del trabajo (JSON como string)
+  status         String      @default("pending") // pending, processing, completed, failed, cancelled
+  attempts       Int         @default(0)
+  max_attempts   Int         @default(3)
+  last_error     String?
+  scheduled_for  DateTime?   // Para trabajos programados
+  started_at     DateTime?
+  completed_at   DateTime?
+  created_at     DateTime    @default(now())
+  updated_at     DateTime    @updatedAt
+
+  // Relaciones
+  integration    Integration @relation(fields: [integration_id], references: [id])
+
+  @@index([integration_id, job_type])
+  @@index([status, scheduled_for])
+  @@index([created_at])
+  @@map("sync_jobs")
+}
