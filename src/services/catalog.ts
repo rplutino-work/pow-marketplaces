@@ -32,11 +32,16 @@ import { logger } from '../utils/logger';
  */
 const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
   // Mapeo de categorías de Hermes a categorías de MercadoLibre
-  // MLA417370 = Remeras (categoría de ropa que acepta COLOR y SIZE)
-  // IMPORTANTE: Esta categoría requiere SIZE_GRID_ID, pero intentamos primero
-  // Si falla, crearemos el producto como simple (sin variaciones) usando MLA3530
-  default: 'MLA417370', // Remeras - intentar primero con variaciones
-  fallback: 'MLA3530', // Hogar > Decoración - usar si falla con MLA417370
+  // Para productos con variaciones de ropa, usar categorías más específicas:
+  // MLA1430 = Ropa y Accesorios (categoría principal, más flexible)
+  // MLA417370 = Remeras (muy específica, puede requerir SIZE_GRID_ID)
+  // MLA414238 = Camisas (para blazers, camisas, etc.)
+  // MLA414252 = Pantalones
+  // MLA414239 = Camperas y Buzos
+  // MLA414254 = Vestidos
+  // MLA414240 = Faldas
+  default: 'MLA1430', // Ropa y Accesorios - categoría principal más flexible
+  fallback: 'MLA3530', // Hogar > Decoración - usar si falla con categorías de ropa
 };
 
 /**
@@ -265,7 +270,9 @@ async function createProductInMeli(
   // Mapear category_id de Hermes a MercadoLibre
   // Para productos con variaciones, usar categoría de ropa que acepta COLOR/SIZE
   const hasVariations = product.variations && product.variations.length > 1;
-  const meliCategoryId = hasVariations ? 'MLA417370' : mapHermesCategoryToMeli(product.category_id);
+  // Usar categoría principal de ropa (MLA1430) que es más flexible y no requiere SIZE_GRID_ID obligatorio
+  // Si el producto específicamente requiere SIZE_GRID_ID, se puede configurar en ajustes_default
+  const meliCategoryId = hasVariations ? 'MLA1430' : mapHermesCategoryToMeli(product.category_id);
   
   // Construir atributos base
   const baseAttributes: any[] = [
@@ -316,11 +323,13 @@ async function createProductInMeli(
     baseAttributes.push({ id: 'MODEL', value_name: productTitle.substring(0, 50) });
   }
 
-  // SIZE_GRID_ID - Obtener de ajustes_default de la integración (requerido para categorías de ropa)
+  // SIZE_GRID_ID - Obtener de ajustes_default de la integración (opcional para categorías de ropa)
   // Este ID debe estar configurado en ajustes_default como JSON: {"size_grid_id": "123456"}
   // IMPORTANTE: SIZE_GRID_ID debe ser el ID numérico de MercadoLibre, NO el nombre de la tabla
   // IMPORTANTE: SIZE_GRID_ID debe estar en los atributos del item principal, NO en las variaciones
-  if (hasVariations && meliCategoryId === 'MLA417370') {
+  // NOTA: Algunas categorías de ropa requieren SIZE_GRID_ID, otras no. Intentamos agregarlo si está configurado.
+  // Si falla, el fallback intentará crear el producto sin SIZE_GRID_ID
+  if (hasVariations && (meliCategoryId === 'MLA1430' || meliCategoryId === 'MLA417370' || meliCategoryId.startsWith('MLA414'))) {
     try {
       const prisma = getPrisma();
       const integration = await prisma.integration.findUnique({
@@ -723,7 +732,7 @@ async function createProductInMeli(
 
   // Crear el producto en MercadoLibre
   try {
-    await meliService.createItem(meliItem, accessToken);
+  await meliService.createItem(meliItem, accessToken);
     logger.info(`Producto creado en ML: ${productSku}`);
   } catch (error: any) {
     // Si falla por SIZE_GRID_ID inválido, intentar sin variaciones o con otra categoría
