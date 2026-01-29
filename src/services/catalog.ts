@@ -346,6 +346,21 @@ async function createProductInMeli(
     };
   }
 
+  // Log del producto completo para debugging
+  logger.info(`Producto recibido: ${productSku}`, {
+    id: product.id,
+    sku: productSku,
+    title: productTitle,
+    variations_count: product.variations?.length || 0,
+    variations_sample: product.variations?.slice(0, 2).map((v: any) => ({
+      sku: v.sku,
+      has_properties: !!v.properties && Object.keys(v.properties || {}).length > 0,
+      has_attributes: !!v.attributes && Object.keys(v.attributes || {}).length > 0,
+      properties_keys: v.properties ? Object.keys(v.properties) : [],
+      attributes_keys: v.attributes ? Object.keys(v.attributes) : [],
+    })),
+  });
+
   // Manejar variaciones
   if (product.variations && product.variations.length > 0) {
     const hasMultipleVariations = product.variations.length > 1;
@@ -465,11 +480,14 @@ async function createProductInMeli(
             });
             logger.info(`Usando propiedad '${key}' como diferenciador para variación ${variantSku}: ${value}`);
           } else {
-            // Si no hay propiedades diferenciadoras válidas, log detallado y omitir
+            // Si no hay propiedades diferenciadoras válidas, no podemos crear variaciones
+            // porque MercadoLibre requiere attribute_combinations válidos
+            // En este caso, el producto se creará como simple (sin variaciones)
             logger.warn(`Variación ${variantSku} sin atributos diferenciadores válidos - se omitirá`, {
               available_properties: Object.keys(variantAttrs),
               excluded_attributes: attributesInItem,
               excluded_keys: excludedKeys,
+              note: 'El producto se creará como simple (sin variaciones) si ninguna variación tiene propiedades válidas',
             });
             return null; // Retornar null para filtrar esta variación
           }
