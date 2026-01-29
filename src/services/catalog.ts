@@ -32,8 +32,10 @@ import { logger } from '../utils/logger';
  */
 const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
   // Por ahora, todas las categorías de Hermes se mapean a indumentaria
-  // MLA1430 = Ropa y Accesorios (categoría principal de indumentaria en ML)
-  default: 'MLA1430',
+  // MLA417370 = Remeras (categoría hoja/leaf de indumentaria en ML)
+  // IMPORTANTE: MLA1430 es una categoría padre, no se puede usar directamente
+  // Usamos MLA417370 (Remeras) como default porque es una categoría hoja válida
+  default: 'MLA417370',
 };
 
 /**
@@ -260,6 +262,45 @@ async function createProductInMeli(
   // Mapear category_id de Hermes a MercadoLibre
   const meliCategoryId = mapHermesCategoryToMeli(product.category_id);
   
+  // Construir atributos base
+  const baseAttributes: any[] = [
+    { id: 'SELLER_SKU', value_name: productSku },
+    { id: 'BRAND', value_name: product.brand || 'Genérica' },
+  ];
+
+  // Agregar atributos obligatorios de ropa si están disponibles en las propiedades
+  // Estos atributos vienen de las variaciones o del producto
+  const allProperties: Record<string, string> = {};
+  
+  // Recolectar propiedades de todas las variaciones
+  if (product.variations && product.variations.length > 0) {
+    product.variations.forEach(v => {
+      const props = v.properties || v.attributes || {};
+      Object.assign(allProperties, props);
+    });
+  }
+
+  // Mapear propiedades comunes a atributos de MercadoLibre
+  // GENDER (Género)
+  if (allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER']) {
+    const gender = allProperties['Género'] || allProperties['Genero'] || allProperties['GENDER'];
+    baseAttributes.push({ id: 'GENDER', value_name: String(gender) });
+  } else {
+    // Default: Sin género específico (puede ser unisex)
+    baseAttributes.push({ id: 'GENDER', value_name: 'Sin género específico' });
+  }
+
+  // MODEL (Modelo) - usar el título del producto si no hay modelo específico
+  if (allProperties['Modelo'] || allProperties['MODEL']) {
+    baseAttributes.push({ 
+      id: 'MODEL', 
+      value_name: String(allProperties['Modelo'] || allProperties['MODEL']) 
+    });
+  } else {
+    // Usar el título como modelo
+    baseAttributes.push({ id: 'MODEL', value_name: productTitle.substring(0, 50) });
+  }
+
   // Construir item para MercadoLibre
   const meliItem: any = {
     title: productTitle.substring(0, 60),
@@ -271,11 +312,8 @@ async function createProductInMeli(
     seller_custom_field: productSku,
     description: { plain_text: productDescription },
     pictures: (product.images?.map(url => ({ source: url })) || 
-               product.pictures?.map(p => ({ source: p.url })) || []),
-    attributes: [
-      { id: 'SELLER_SKU', value_name: productSku },
-      { id: 'BRAND', value_name: product.brand || 'Genérica' },
-    ],
+               product.pictures?.map(p => ({ source: p.url })) || []).filter((p: any) => p.source), // Filtrar URLs vacías
+    attributes: baseAttributes,
   };
 
   // Agregar dimensiones si existen
@@ -296,26 +334,63 @@ async function createProductInMeli(
       // Producto con múltiples variaciones
       // IMPORTANTE: Cada variación debe tener su SKU en seller_custom_field
       // para que cuando llegue la orden, el sistema viejo pueda encontrarlo con item.dig('item','seller_sku')
+      
+      // El precio del item principal debe ser el menor de las variaciones
+      const minPrice = Math.min(...product.variations.map(v => v.price));
+      meliItem.price = minPrice;
+      
       meliItem.variations = product.variations.map(v => {
         const variantSku = v.sku || v.identifier || '';
         const variantAttrs = v.attributes || v.properties || {};
+        
+        // Construir attribute_combinations para la variación
+        // Estos deben incluir COLOR, SIZE (Talle), etc.
+        const attributeCombinations: any[] = [];
+        
+        // COLOR
+        if (variantAttrs['Color'] || variantAttrs['COLOR']) {
+          attributeCombinations.push({
+            id: 'COLOR',
+            value_name: String(variantAttrs['Color'] || variantAttrs['COLOR']),
+          });
+        }
+        
+        // SIZE (Talle)
+        if (variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']) {
+          attributeCombinations.push({
+            id: 'SIZE',
+            value_name: String(variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']),
+          });
+        }
+        
+        // Agregar otras propiedades como attribute_combinations
+        Object.entries(variantAttrs).forEach(([key, value]) => {
+          const upperKey = key.toUpperCase();
+          // Solo agregar si no es COLOR o SIZE (ya los agregamos arriba)
+          if (upperKey !== 'COLOR' && upperKey !== 'SIZE' && 
+              key !== 'Talle' && key !== 'Talla' && 
+              upperKey !== 'GENDER' && upperKey !== 'MODEL') {
+            attributeCombinations.push({
+              id: upperKey,
+              value_name: String(value),
+            });
+          }
+        });
         
         logger.debug(`Creando variación con SKU: ${variantSku}`, {
           sku: variantSku,
           price: v.price,
           stock: v.stock,
-          attributes: variantAttrs,
+          attribute_combinations: attributeCombinations,
         });
         
         return {
           seller_custom_field: variantSku, // SKU de la variación (el sistema viejo busca en seller_sku)
           price: v.price,
           available_quantity: v.stock,
-          attribute_combinations: Object.entries(variantAttrs).map(([id, value]) => ({
-            id: id.toUpperCase(),
-            value_name: String(value),
-          })),
-          picture_ids: meliItem.pictures?.slice(0, 1).map((_: any, i: number) => `${i + 1}`) || [],
+          attribute_combinations: attributeCombinations,
+          // No usar picture_ids si no hay imágenes subidas primero
+          // picture_ids: meliItem.pictures?.slice(0, 1).map((_: any, i: number) => `${i + 1}`) || [],
         };
       });
     } else {
@@ -323,12 +398,14 @@ async function createProductInMeli(
       // IMPORTANTE: Usar el SKU de la variación, no del producto principal
       const singleVariation = product.variations[0];
       const variantSku = singleVariation.sku || singleVariation.identifier || productSku;
+      const variantAttrs = singleVariation.attributes || singleVariation.properties || {};
       
       logger.debug(`Producto simple con SKU de variación: ${variantSku}`, {
         product_sku: productSku,
         variant_sku: variantSku,
         price: singleVariation.price || product.price,
         stock: singleVariation.stock || product.stock,
+        properties: variantAttrs,
       });
       
       meliItem.price = singleVariation.price || product.price;
@@ -341,6 +418,21 @@ async function createProductInMeli(
         meliItem.attributes[skuAttributeIndex].value_name = variantSku;
       } else {
         meliItem.attributes.push({ id: 'SELLER_SKU', value_name: variantSku });
+      }
+      
+      // Agregar COLOR y SIZE como atributos del item principal si están disponibles
+      if (variantAttrs['Color'] || variantAttrs['COLOR']) {
+        meliItem.attributes.push({
+          id: 'COLOR',
+          value_name: String(variantAttrs['Color'] || variantAttrs['COLOR']),
+        });
+      }
+      
+      if (variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']) {
+        meliItem.attributes.push({
+          id: 'SIZE',
+          value_name: String(variantAttrs['Talle'] || variantAttrs['Talla'] || variantAttrs['SIZE']),
+        });
       }
     }
   } else {
