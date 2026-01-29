@@ -34,6 +34,7 @@ const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
   // Mapeo de categorías de Hermes a categorías de MercadoLibre
   // IMPORTANTE: MercadoLibre requiere categorías "hoja" (leaf categories), no categorías padre
   // Para productos con variaciones de ropa, usar categorías hoja específicas:
+  // MLA109282 = Ropa y Accesorios > Otros (categoría hoja que permite variaciones sin SIZE_GRID_ID)
   // MLA414238 = Camisas (categoría hoja, para blazers, camisas, etc.)
   // MLA414252 = Pantalones (categoría hoja)
   // MLA414239 = Camperas y Buzos (categoría hoja)
@@ -41,7 +42,7 @@ const HERMES_TO_MELI_CATEGORY_MAP: Record<number | string, string> = {
   // MLA414240 = Faldas (categoría hoja)
   // MLA417370 = Remeras (categoría hoja, puede requerir SIZE_GRID_ID)
   // MLA3530 = Hogar > Decoración (categoría hoja, no requiere GENDER ni SIZE_GRID_ID)
-  default: 'MLA414238', // Camisas - categoría hoja para blazers y prendas superiores
+  default: 'MLA109282', // Ropa y Accesorios > Otros - permite variaciones sin SIZE_GRID_ID
   fallback: 'MLA3530', // Hogar > Decoración - usar si falla con categorías de ropa
 };
 
@@ -269,12 +270,11 @@ async function createProductInMeli(
   const productDescription = product.description || product.brief_description || '';
   
   // Mapear category_id de Hermes a MercadoLibre
-  // Para productos con variaciones, usar categoría hoja de ropa que acepta COLOR/SIZE
+  // Para productos con variaciones, usar "Ropa y Accesorios / Otros" que permite variaciones sin SIZE_GRID_ID
   const hasVariations = product.variations && product.variations.length > 1;
-  // IMPORTANTE: MercadoLibre requiere categorías "hoja" (leaf categories)
-  // Usar MLA414238 (Camisas) que es una categoría hoja y acepta variaciones con COLOR/SIZE
-  // Si el producto específicamente requiere SIZE_GRID_ID, se puede configurar en ajustes_default
-  const meliCategoryId = hasVariations ? 'MLA414238' : mapHermesCategoryToMeli(product.category_id);
+  // IMPORTANTE: Usar MLA109282 (Ropa y Accesorios > Otros) que es una categoría hoja
+  // y permite variaciones con COLOR/SIZE sin requerir SIZE_GRID_ID
+  const meliCategoryId = hasVariations ? 'MLA109282' : mapHermesCategoryToMeli(product.category_id);
   
   // Construir atributos base
   const baseAttributes: any[] = [
@@ -315,9 +315,9 @@ async function createProductInMeli(
   }
   
   // Si no hay género en propiedades, usar "Mujer" como default para categorías de ropa
-  // IMPORTANTE: GENDER es obligatorio para categorías de ropa (MLA414238, MLA417370, etc.)
+  // IMPORTANTE: GENDER es obligatorio para categorías de ropa (MLA109282, MLA414238, MLA417370, etc.)
   // NOTA: "Unisex" no es válido para todas las categorías, usar "Mujer" como default más seguro
-  if (hasVariations || meliCategoryId.startsWith('MLA414') || meliCategoryId === 'MLA417370') {
+  if (hasVariations || meliCategoryId.startsWith('MLA414') || meliCategoryId === 'MLA417370' || meliCategoryId === 'MLA109282') {
     if (!genderValue) {
       genderValue = 'Mujer'; // Default para categorías de ropa (más seguro que "Unisex")
       logger.info(`GENDER no encontrado en propiedades, usando default: ${genderValue}`);
@@ -340,9 +340,10 @@ async function createProductInMeli(
   // Este ID debe estar configurado en ajustes_default como JSON: {"size_grid_id": "123456"}
   // IMPORTANTE: SIZE_GRID_ID debe ser el ID numérico de MercadoLibre, NO el nombre de la tabla
   // IMPORTANTE: SIZE_GRID_ID debe estar en los atributos del item principal, NO en las variaciones
-  // NOTA: Algunas categorías de ropa requieren SIZE_GRID_ID, otras no. Intentamos agregarlo si está configurado.
+  // NOTA: MLA109282 (Ropa y Accesorios > Otros) NO requiere SIZE_GRID_ID, pero otras categorías sí.
+  // Solo agregar SIZE_GRID_ID si la categoría lo requiere (no MLA109282)
   // Si falla, el fallback intentará crear el producto sin SIZE_GRID_ID
-  if (hasVariations && (meliCategoryId === 'MLA1430' || meliCategoryId === 'MLA417370' || meliCategoryId.startsWith('MLA414'))) {
+  if (hasVariations && meliCategoryId !== 'MLA109282' && (meliCategoryId === 'MLA417370' || meliCategoryId.startsWith('MLA414'))) {
     try {
       const prisma = getPrisma();
       const integration = await prisma.integration.findUnique({
@@ -750,18 +751,29 @@ async function createProductInMeli(
   } catch (error: any) {
     // Manejar errores comunes y intentar fallback
     const errorMessage = error.message || '';
-    const isSizeGridError = errorMessage.includes('SIZE_GRID_ID') || errorMessage.includes('size_grid');
-    const isPictureIdsError = errorMessage.includes('picture') || errorMessage.includes('pictures');
-    const isCategoryError = errorMessage.includes('category') || errorMessage.includes('leaf category') || errorMessage.includes('not allowed to post');
-    const isGenderError = errorMessage.includes('Género') || errorMessage.includes('GENDER') || errorMessage.includes('obligatorio');
+    const errorCause = error.cause || [];
+    const allErrorMessages = [
+      errorMessage,
+      ...errorCause.map((c: any) => c.message || '').filter(Boolean)
+    ].join(' ');
+    
+    const isSizeGridError = allErrorMessages.includes('SIZE_GRID_ID') || allErrorMessages.includes('size_grid') || allErrorMessages.includes('fashion_grid');
+    const isPictureIdsError = allErrorMessages.includes('picture') || allErrorMessages.includes('pictures');
+    const isCategoryError = allErrorMessages.includes('category') || allErrorMessages.includes('leaf category') || allErrorMessages.includes('not allowed to post');
+    const isGenderError = allErrorMessages.includes('Género') || allErrorMessages.includes('GENDER') || allErrorMessages.includes('obligatorio');
+    const isAgeGroupError = allErrorMessages.includes('AGE_GROUP') || allErrorMessages.includes('age_group');
+    const isAttributeError = allErrorMessages.includes('Attribute') && (isSizeGridError || isAgeGroupError || isGenderError);
     
     if (isSizeGridError || isPictureIdsError || isCategoryError || isGenderError) {
       logger.warn(`Error al crear producto con variaciones, intentando crear como producto simple:`, {
         error: errorMessage,
+        allErrors: allErrorMessages,
         isSizeGridError,
         isPictureIdsError,
         isCategoryError,
         isGenderError,
+        isAgeGroupError,
+        isAttributeError,
       });
       
       // Remover SIZE_GRID_ID de los atributos si existe
