@@ -29,6 +29,7 @@ import helmet from 'helmet';
 
 import { logger } from './utils/logger';
 import { initDatabase } from './config/database';
+import { isRedisAvailable } from './config/redis';
 
 // Rutas
 import healthRoutes from './routes/health';
@@ -39,9 +40,11 @@ import integrationsRoutes from './routes/integrations';
 import adminRoutes from './routes/admin';
 import hermesRoutes from './routes/hermes';
 import ordersRoutes from './routes/orders';
+import queuesRoutes from './routes/queues';
 
 // Workers
 import { startScheduler } from './workers/scheduler';
+import { startWebhookWorker, startOrderRetryWorker, shutdownQueues } from './queues/webhookQueue';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // CONFIGURACIÓN
@@ -96,6 +99,9 @@ app.use('/orders', ordersRoutes);
 // Administración
 app.use('/admin', adminRoutes);
 
+// Monitoreo de colas
+app.use('/queues', queuesRoutes);
+
 // Rutas legacy/compatibilidad
 app.use('/marketplaces', (req: Request, res: Response) => {
   res.json({ message: 'Use /api/v1/integrations instead' });
@@ -138,7 +144,18 @@ async function startServer() {
 
     // Iniciar workers programados
     startScheduler();
-    logger.info('✅ Workers iniciados');
+    logger.info('✅ Scheduler iniciado');
+
+    // Iniciar sistema de colas (BullMQ + Redis)
+    const redisOk = await isRedisAvailable();
+    if (redisOk) {
+      startWebhookWorker();
+      startOrderRetryWorker();
+      logger.info('✅ BullMQ workers iniciados (Redis conectado)');
+    } else {
+      logger.warn('⚠️ Redis no disponible - webhooks se procesarán de forma síncrona');
+      logger.warn('   Para habilitar colas, iniciar Redis: redis-server');
+    }
 
     // Iniciar servidor HTTP
     app.listen(PORT, '0.0.0.0', () => {
@@ -158,6 +175,7 @@ async function startServer() {
 ║   • Catalog:      /api/v1/hermes/catalog/sync                    ║
 ║   • Integrations: /api/v1/integrations                           ║
 ║   • Admin:        /admin/health                                  ║
+║   • Queues:       /queues/stats                                  ║
 ║                                                                  ║
 ╚══════════════════════════════════════════════════════════════════╝
       `);
@@ -169,16 +187,19 @@ async function startServer() {
   }
 }
 
-// Manejo de señales de terminación
-process.on('SIGTERM', () => {
-  logger.info('SIGTERM recibido, cerrando servidor...');
+// Manejo de señales de terminación (graceful shutdown)
+async function gracefulShutdown(signal: string) {
+  logger.info(`${signal} recibido, cerrando servidor...`);
+  try {
+    await shutdownQueues();
+  } catch (e: any) {
+    logger.error('Error cerrando colas:', { error: e.message });
+  }
   process.exit(0);
-});
+}
 
-process.on('SIGINT', () => {
-  logger.info('SIGINT recibido, cerrando servidor...');
-  process.exit(0);
-});
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
 
 process.on('unhandledRejection', (reason: any) => {
   logger.error('Unhandled Rejection:', { reason: reason?.message || reason });
