@@ -517,6 +517,10 @@ async function createProductInMeli(
       const prices = product.variations.map(v => v.price);
       const minPrice = Math.min(...prices);
       meliItem.price = minPrice; // Usar el precio mínimo para el item principal
+
+      // available_quantity del item principal = suma de stock de todas las variaciones
+      const totalStock = product.variations.reduce((sum, v) => sum + (v.stock || 0), 0);
+      meliItem.available_quantity = totalStock || 1; // Mínimo 1 para evitar error de MELI
       
       // IMPORTANTE: picture_ids son los IDs reales de las imágenes después de subirlas a MercadoLibre
       // MercadoLibre requiere que cada variación tenga entre 1 y 10 imágenes (picture_ids)

@@ -175,9 +175,14 @@ export async function createItem(item: any, accessToken: string): Promise<any> {
     const errorData = await response.json() as { cause?: Array<{ message?: string }>; message?: string };
     logger.error('Error creando producto:', { error: errorData });
     
-    const errorMessage = errorData.cause?.[0]?.message || errorData.message || 'Error creando producto';
+    // Build comprehensive error message from all MELI error causes
+    const causes = errorData.cause || [];
+    const allMessages = causes.map((c: any) => c.message || c.code || '').filter(Boolean);
+    const errorMessage = allMessages.length > 0
+      ? allMessages.join(' | ')
+      : (errorData.message || 'Error creando producto');
     const fullError = new Error(`Failed to create product: ${errorMessage}`);
-    (fullError as any).cause = errorData.cause || [];
+    (fullError as any).cause = causes;
     (fullError as any).meliResponse = errorData;
     logger.error('Full MELI error response:', JSON.stringify(errorData, null, 2));
     throw fullError;
