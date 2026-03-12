@@ -222,6 +222,7 @@ export async function syncCatalog(params: {
         created: result.created,
         updated: result.updated,
         closed: result.closed,
+        errors: result.errors.slice(0, 20),
       }),
       resultado: result.failed === 0 ? 'success' : 'warning',
     },

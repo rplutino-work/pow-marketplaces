@@ -146,6 +146,7 @@ router.post('/catalog/sync', async (req: Request, res: Response) => {
         updated: result.updated,
         closed: result.closed,
       },
+      errors: result.errors || [],
       duration_ms: duration,
     });
 
