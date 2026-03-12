@@ -453,8 +453,10 @@ async function createProductInMeli(
   }
   
   // Construir item para MercadoLibre
+  // IMPORTANTE: family_name es obligatorio en MELI para publicaciones nuevas (catálogo)
   const meliItem: any = {
     title: productTitle.substring(0, 60),
+    family_name: productTitle.substring(0, 60),
     category_id: meliCategoryId,
     currency_id: 'ARS',
     buying_mode: 'buy_it_now',
@@ -462,7 +464,7 @@ async function createProductInMeli(
     condition: 'new',
     seller_custom_field: productSku,
     description: { plain_text: productDescription },
-    pictures: (product.images?.map(url => ({ source: url })) || 
+    pictures: (product.images?.map(url => ({ source: url })) ||
                product.pictures?.map(p => ({ source: p.url })) || []).filter((p: any) => p.source), // Filtrar URLs vacías
     attributes: baseAttributes,
   };
