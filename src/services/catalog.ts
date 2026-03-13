@@ -289,8 +289,8 @@ async function createProductInMeli(
                    .filter((p: any) => p.source);
 
   // Build simple MELI item (no variations - one listing per product)
+  // IMPORTANT: When using family_name (catalog mode), do NOT include title - MELI auto-generates it
   const meliItem: any = {
-    title: productTitle.substring(0, 60),
     family_name: productTitle.substring(0, 60),
     category_id: meliCategoryId,
     currency_id: 'ARS',
