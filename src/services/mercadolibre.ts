@@ -175,12 +175,19 @@ export async function createItem(item: any, accessToken: string): Promise<any> {
     const errorData = await response.json() as { cause?: Array<{ message?: string }>; message?: string };
     logger.error('Error creando producto:', { error: errorData });
     
-    // Build comprehensive error message from all MELI error causes
+    // Build comprehensive error message including codes, messages, paths, and references
     const causes = errorData.cause || [];
-    const allMessages = causes.map((c: any) => c.message || c.code || '').filter(Boolean);
-    const errorMessage = allMessages.length > 0
-      ? allMessages.join(' | ')
-      : (errorData.message || 'Error creando producto');
+    const causeDetails = causes.map((c: any) => {
+      const parts = [];
+      if (c.code) parts.push(`code=${c.code}`);
+      if (c.message) parts.push(`msg=${c.message}`);
+      if (c.path) parts.push(`path=${c.path}`);
+      if (c.references) parts.push(`refs=${JSON.stringify(c.references)}`);
+      return parts.join(', ') || JSON.stringify(c);
+    }).filter(Boolean);
+    const errorMessage = causeDetails.length > 0
+      ? causeDetails.join(' | ')
+      : ((errorData as any).error || errorData.message || 'Error creando producto');
     const fullError = new Error(`Failed to create product: ${errorMessage}`);
     (fullError as any).cause = causes;
     (fullError as any).meliResponse = errorData;
